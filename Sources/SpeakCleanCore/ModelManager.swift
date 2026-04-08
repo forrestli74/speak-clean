@@ -2,12 +2,19 @@ import Foundation
 
 public final class ModelManager: Sendable {
     private let modelsDir: URL
+    private let downloadManager: DownloadManager
+    private let session: URLSession
 
-    public init(modelsDir: URL) {
+    private static let hfRepo = "ggerganov/whisper.cpp"
+    private static let hfBaseURL = "https://huggingface.co/\(hfRepo)/resolve/main/"
+    private static let hfAPIURL = "https://huggingface.co/api/models/\(hfRepo)/tree/main"
+
+    public init(modelsDir: URL, session: URLSession = .shared) {
         self.modelsDir = modelsDir
+        self.session = session
+        self.downloadManager = DownloadManager(session: session)
     }
 
-    /// Returns local URL for model, downloading from HuggingFace if not cached.
     public func modelURL(for model: String) async throws -> URL {
         let filename = "ggml-\(model).bin"
         let localURL = modelsDir.appendingPathComponent(filename)
@@ -15,13 +22,12 @@ public final class ModelManager: Sendable {
         try FileManager.default.createDirectory(at: modelsDir, withIntermediateDirectories: true)
 
         if !FileManager.default.fileExists(atPath: localURL.path) {
-            try await download(
-                filename: filename, to: localURL,
-                baseURL: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/"
-            )
+            let sha = await fetchSHA256(for: filename)
+            let remoteURL = URL(string: "\(Self.hfBaseURL)\(filename)")!
+            try await downloadManager.fetch(from: remoteURL, to: localURL, expectedSHA256: sha)
         }
 
-        // Download CoreML encoder for ANE acceleration if not present
+        // CoreML encoder
         let coremlDir = modelsDir.appendingPathComponent("ggml-\(model)-encoder.mlmodelc")
         if !FileManager.default.fileExists(atPath: coremlDir.path) {
             try await downloadCoreML(model: model)
@@ -30,7 +36,31 @@ public final class ModelManager: Sendable {
         return localURL
     }
 
-    /// Deletes all cached models.
+    /// Fetches SHA256 for a file from HuggingFace API. Returns nil on failure (best effort).
+    public func fetchSHA256(for filename: String) async -> String? {
+        guard let apiURL = URL(string: Self.hfAPIURL) else { return nil }
+
+        do {
+            let (data, response) = try await session.data(from: apiURL)
+            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+                return nil
+            }
+
+            struct HFFile: Decodable {
+                let path: String
+                let lfs: LFS?
+                struct LFS: Decodable {
+                    let sha256: String
+                }
+            }
+
+            let files = try JSONDecoder().decode([HFFile].self, from: data)
+            return files.first(where: { $0.path == filename })?.lfs?.sha256
+        } catch {
+            return nil
+        }
+    }
+
     public func cleanCache() throws {
         if FileManager.default.fileExists(atPath: modelsDir.path) {
             try FileManager.default.removeItem(at: modelsDir)
@@ -42,12 +72,10 @@ public final class ModelManager: Sendable {
         let zipFilename = "ggml-\(model)-encoder.mlmodelc.zip"
         let zipURL = modelsDir.appendingPathComponent(zipFilename)
 
-        try await download(
-            filename: zipFilename, to: zipURL,
-            baseURL: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/"
-        )
+        let sha = await fetchSHA256(for: zipFilename)
+        let remoteURL = URL(string: "\(Self.hfBaseURL)\(zipFilename)")!
+        try await downloadManager.fetch(from: remoteURL, to: zipURL, expectedSHA256: sha)
 
-        // Unzip
         print("Extracting \(zipFilename)...")
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/unzip")
@@ -59,51 +87,16 @@ public final class ModelManager: Sendable {
             throw ModelError.extractFailed(zipFilename)
         }
 
-        // Clean up zip
         try? FileManager.default.removeItem(at: zipURL)
         print("CoreML encoder ready: ggml-\(model)-encoder.mlmodelc")
     }
-
-    private func download(filename: String, to destination: URL, baseURL: String) async throws {
-        let url = URL(string: "\(baseURL)\(filename)")!
-        let tempURL = destination.appendingPathExtension("download")
-
-        // Clean up temp file on failure
-        defer {
-            if FileManager.default.fileExists(atPath: tempURL.path),
-               !FileManager.default.fileExists(atPath: destination.path) {
-                try? FileManager.default.removeItem(at: tempURL)
-            }
-        }
-
-        print("Downloading \(filename)...")
-        let (downloadedURL, response) = try await URLSession.shared.download(from: url)
-
-        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
-            throw ModelError.downloadFailed(filename)
-        }
-
-        // Move to temp location first (download file is auto-deleted by URLSession)
-        try FileManager.default.moveItem(at: downloadedURL, to: tempURL)
-
-        let totalBytes = httpResponse.expectedContentLength
-        let mbTotal = Double(totalBytes) / (1024 * 1024)
-        print("Downloaded \(filename): \(String(format: "%.1f", mbTotal)) MB")
-
-        // Atomic move to final location
-        try FileManager.default.moveItem(at: tempURL, to: destination)
-        print("Model ready: \(filename)")
-    }
-
 }
 
 public enum ModelError: Error, LocalizedError {
-    case downloadFailed(String)
     case extractFailed(String)
 
     public var errorDescription: String? {
         switch self {
-        case .downloadFailed(let name): return "Failed to download model: \(name)"
         case .extractFailed(let name): return "Failed to extract: \(name)"
         }
     }
