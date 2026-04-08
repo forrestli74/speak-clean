@@ -40,15 +40,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func buildMenu() -> NSMenu {
         let menu = NSMenu()
-        menu.addItem(NSMenuItem(title: "Edit Config…", action: #selector(editConfig), keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: "Edit Dictionary…", action: #selector(editDictionary), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "Clean Model Cache", action: #selector(cleanModelCache), keyEquivalent: ""))
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         return menu
     }
 
-    @objc private func editConfig() {
-        AppConfig.openInEditor()
+    @objc private func editDictionary() {
+        AppConfig.openDictionary()
     }
 
     @objc private func cleanModelCache() {
@@ -61,15 +61,20 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func setupGlobalShortcut() {
+        guard let shortcut = AppConfig.parsedShortcut else {
+            print("Invalid shortcut: \(AppConfig.shortcut)")
+            return
+        }
+        let modifiers = shortcut.modifiers
+        let keyCode = shortcut.keyCode
+
         NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            // Option+Space: keyCode 49 = space
-            if event.modifierFlags.contains(.option) && event.keyCode == 49 {
+            if event.modifierFlags.contains(modifiers) && event.keyCode == keyCode {
                 self?.toggleRecording()
             }
         }
-        // Also monitor local events (when app itself is focused)
         NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            if event.modifierFlags.contains(.option) && event.keyCode == 49 {
+            if event.modifierFlags.contains(modifiers) && event.keyCode == keyCode {
                 self?.toggleRecording()
                 return nil
             }
