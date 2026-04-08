@@ -59,7 +59,7 @@ public struct DownloadManager: Sendable {
         case 416:
             // Range not satisfiable — delete partial and retry fresh
             try? FileManager.default.removeItem(at: tempURL)
-            try await fetchFresh(from: url, to: destination, tempURL: tempURL)
+            try await fetchFresh(from: url, to: destination, tempURL: tempURL, expectedSHA256: expectedSHA256)
             return
 
         default:
@@ -82,7 +82,12 @@ public struct DownloadManager: Sendable {
     // MARK: - Private helpers
 
     /// Fresh download without resume — used as 416 retry path.
-    private func fetchFresh(from url: URL, to destination: URL, tempURL: URL) async throws {
+    private func fetchFresh(
+        from url: URL,
+        to destination: URL,
+        tempURL: URL,
+        expectedSHA256: String?
+    ) async throws {
         let request = URLRequest(url: url)
         let (bytes, response) = try await session.bytes(for: request)
 
@@ -93,7 +98,17 @@ public struct DownloadManager: Sendable {
 
         try await streamToFile(bytes: bytes, to: tempURL, append: false)
 
-        // Atomic move temp -> destination (no checksum check here — caller already deleted partial)
+        // Verify checksum if provided
+        if let expectedSHA256 {
+            let actual = try Self.sha256(of: tempURL)
+            if actual != expectedSHA256.lowercased() {
+                try? FileManager.default.removeItem(at: tempURL)
+                throw DownloadError.checksumMismatch(
+                    expected: expectedSHA256.lowercased(), actual: actual)
+            }
+        }
+
+        // Atomic move temp -> destination
         try FileManager.default.moveItem(at: tempURL, to: destination)
     }
 
