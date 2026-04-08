@@ -50,6 +50,7 @@
 
 ### TODO
 - Show status line in menu-bar dropdown (idle / recording / transcribing)
+- Better error recovery: if model download fails, retry on next recording instead of staying broken until restart
 
 ### Notes
 - `SpeakCleanCore/TextCleaner` — regex-based filler/self-correction cleaner with test suite as spec; will be swapped for LLM post-processing
@@ -58,6 +59,7 @@
 - Whisper auto-uses CoreML if `.mlmodelc` exists, falls back to CPU if not — no toggle needed
 - `Transcriber` is `@unchecked Sendable` (not an actor) due to SwiftWhisper Sendable conflicts with Swift 6.2
 - `--audio` CLI uses `dispatchMain()` + `exit(0)` instead of `DispatchSemaphore` — semaphore blocks main thread which CoreML needs
+- **Lazy model lifecycle** — download at launch, but load into memory only when recording starts (parallel with mic capture), unload after paste. ~0MB idle, peak only during transcription. Hides load latency behind speaking time.
 
 ## Config
 

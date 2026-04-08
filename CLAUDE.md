@@ -41,6 +41,10 @@ Two targets plus tests (see `Package.swift`):
 - **CLI `--audio` mode** uses `dispatchMain()` + `exit(0)` instead of DispatchSemaphore — semaphore blocks main thread which CoreML needs
 - **CoreML encoder** auto-downloaded alongside GGML model; Whisper auto-uses it if `.mlmodelc` exists, no toggle needed
 
+## Worktrees
+
+Git worktrees should be created in `.worktrees/` directory.
+
 ## Files
 
 - `idea.md` — Living document for project ideas, architecture decisions, status, and roadmap. Updated as the project evolves.
