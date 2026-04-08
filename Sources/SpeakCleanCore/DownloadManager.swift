@@ -36,6 +36,7 @@ public struct DownloadManager: Sendable {
 
         // Check for partial download to support resume
         var request = URLRequest(url: url)
+        request.timeoutInterval = 300  // 5 min — large model files need time
         let existingBytes = Self.fileSize(at: tempURL)
         if existingBytes > 0 {
             request.setValue("bytes=\(existingBytes)-", forHTTPHeaderField: "Range")
@@ -85,7 +86,8 @@ public struct DownloadManager: Sendable {
         tempURL: URL,
         expectedSHA256: String?
     ) async throws {
-        let request = URLRequest(url: url)
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 300
         let (bytes, response) = try await session.bytes(for: request)
 
         guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
