@@ -47,14 +47,16 @@ public struct DownloadManager: Sendable {
             throw DownloadError.downloadFailed(statusCode: 0)
         }
 
+        let computedSHA256: String
+
         switch httpResponse.statusCode {
         case 200:
             // Fresh download — truncate any existing partial file
-            try await streamToFile(bytes: bytes, to: tempURL, append: false)
+            computedSHA256 = try await streamToFile(bytes: bytes, to: tempURL, append: false)
 
         case 206:
             // Partial content — append to existing temp file
-            try await streamToFile(bytes: bytes, to: tempURL, append: true)
+            computedSHA256 = try await streamToFile(bytes: bytes, to: tempURL, append: true)
 
         case 416:
             // Range not satisfiable — delete partial and retry fresh
@@ -66,17 +68,12 @@ public struct DownloadManager: Sendable {
             throw DownloadError.downloadFailed(statusCode: httpResponse.statusCode)
         }
 
-        // Verify checksum if provided
-        if let expectedSHA256 {
-            let actual = try Self.sha256(of: tempURL)
-            if actual != expectedSHA256.lowercased() {
-                try? FileManager.default.removeItem(at: tempURL)
-                throw DownloadError.checksumMismatch(expected: expectedSHA256.lowercased(), actual: actual)
-            }
-        }
-
-        // Atomic move temp -> destination
-        try FileManager.default.moveItem(at: tempURL, to: destination)
+        try verifyAndMove(
+            tempURL: tempURL,
+            destination: destination,
+            expectedSHA256: expectedSHA256,
+            computedSHA256: computedSHA256
+        )
     }
 
     // MARK: - Private helpers
@@ -96,28 +93,40 @@ public struct DownloadManager: Sendable {
             throw DownloadError.downloadFailed(statusCode: code)
         }
 
-        try await streamToFile(bytes: bytes, to: tempURL, append: false)
+        let computedSHA256 = try await streamToFile(bytes: bytes, to: tempURL, append: false)
 
-        // Verify checksum if provided
+        try verifyAndMove(
+            tempURL: tempURL,
+            destination: destination,
+            expectedSHA256: expectedSHA256,
+            computedSHA256: computedSHA256
+        )
+    }
+
+    /// Verify checksum (if expected) and atomically move temp file to destination.
+    private func verifyAndMove(
+        tempURL: URL,
+        destination: URL,
+        expectedSHA256: String?,
+        computedSHA256: String
+    ) throws {
         if let expectedSHA256 {
-            let actual = try Self.sha256(of: tempURL)
-            if actual != expectedSHA256.lowercased() {
+            let expected = expectedSHA256.lowercased()
+            if computedSHA256 != expected {
                 try? FileManager.default.removeItem(at: tempURL)
-                throw DownloadError.checksumMismatch(
-                    expected: expectedSHA256.lowercased(), actual: actual)
+                throw DownloadError.checksumMismatch(expected: expected, actual: computedSHA256)
             }
         }
-
-        // Atomic move temp -> destination
         try FileManager.default.moveItem(at: tempURL, to: destination)
     }
 
     /// Stream bytes to file with 256KB flush interval and cancellation checks.
+    /// Returns the lowercase hex SHA256 digest computed incrementally during streaming.
     private func streamToFile(
         bytes: URLSession.AsyncBytes,
         to fileURL: URL,
         append: Bool
-    ) async throws {
+    ) async throws -> String {
         if !append || !FileManager.default.fileExists(atPath: fileURL.path) {
             FileManager.default.createFile(atPath: fileURL.path, contents: nil)
         }
@@ -129,6 +138,7 @@ public struct DownloadManager: Sendable {
             handle.seekToEndOfFile()
         }
 
+        var hasher = SHA256()
         let flushThreshold = 256 * 1024  // 256 KB
         var buffer = Data()
         buffer.reserveCapacity(flushThreshold)
@@ -138,15 +148,20 @@ public struct DownloadManager: Sendable {
             buffer.append(byte)
 
             if buffer.count >= flushThreshold {
-                handle.write(buffer)
+                hasher.update(data: buffer)
+                try handle.write(contentsOf: buffer)
                 buffer.removeAll(keepingCapacity: true)
             }
         }
 
         // Flush remaining bytes
         if !buffer.isEmpty {
-            handle.write(buffer)
+            hasher.update(data: buffer)
+            try handle.write(contentsOf: buffer)
         }
+
+        let digest = hasher.finalize()
+        return digest.map { String(format: "%02x", $0) }.joined()
     }
 
     /// Returns file size or 0 if file does not exist.
@@ -159,10 +174,4 @@ public struct DownloadManager: Sendable {
         return size
     }
 
-    /// Compute lowercase hex SHA256 of file at URL.
-    private static func sha256(of url: URL) throws -> String {
-        let data = try Data(contentsOf: url)
-        let digest = SHA256.hash(data: data)
-        return digest.map { String(format: "%02x", $0) }.joined()
-    }
 }
