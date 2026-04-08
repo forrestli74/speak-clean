@@ -1,8 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 36 36" width="36" height="36">
-  <!-- Microphone with sparkle accent -->
-  <rect x="13" y="4" width="10" height="16" rx="5" fill="black"/>
-  <path d="M9 18v2a9 9 0 0 0 18 0v-2" fill="none" stroke="black" stroke-width="2.5" stroke-linecap="round"/>
-  <line x1="18" y1="29" x2="18" y2="33" stroke="black" stroke-width="2.5" stroke-linecap="round"/>
-  <!-- Sparkle -->
-  <path d="M28 4l1 2.5 2.5 1-2.5 1-1 2.5-1-2.5L25 7.5l2.5-1z" fill="black"/>
-</svg>
