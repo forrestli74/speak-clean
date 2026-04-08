@@ -72,6 +72,18 @@ try await downloadManager.fetch(from: fileURL, to: localURL, expectedSHA256: sha
 
 Once a file is in its final location, it is trusted forever. Checksum only gates the `.download` -> final move. The only way to force re-download is `cleanCache()`.
 
+## Cancellation
+
+`fetch()` supports Swift cooperative cancellation via `Task.checkCancellation()`. When the user switches models mid-download:
+
+1. `ModelManager` cancels the in-flight download `Task`
+2. The active `fetch()` throws `CancellationError`
+3. `.download` file stays on disk with partial data
+4. `ModelManager` starts a new download for the new model
+5. If the user switches back later, the old `.download` resumes
+
+`DownloadManager` doesn't manage cancellation itself -- it just respects `Task.isCancelled` during the byte-streaming loop. `ModelManager` owns the `Task` and cancels it.
+
 ## Error Handling
 
 | Scenario | Behavior |
