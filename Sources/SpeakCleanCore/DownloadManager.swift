@@ -134,11 +134,19 @@ public struct DownloadManager: Sendable {
         let handle = try FileHandle(forWritingTo: fileURL)
         defer { try? handle.close() }
 
+        var hasher = SHA256()
+
         if append {
+            // Hash pre-existing bytes so final digest covers the full file
+            let reader = try FileHandle(forReadingFrom: fileURL)
+            defer { try? reader.close() }
+            while true {
+                let chunk = reader.readData(ofLength: 256 * 1024)
+                if chunk.isEmpty { break }
+                hasher.update(data: chunk)
+            }
             handle.seekToEndOfFile()
         }
-
-        var hasher = SHA256()
         let flushThreshold = 256 * 1024  // 256 KB
         var buffer = Data()
         buffer.reserveCapacity(flushThreshold)
