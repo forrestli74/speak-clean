@@ -82,9 +82,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var isRecording = false
     private var statusItem: NSStatusItem?
     let transcriber: Transcriber
+    let saveAudioDir: String?
 
-    init(transcriber: Transcriber) {
+    init(transcriber: Transcriber, saveAudioDir: String? = nil) {
         self.transcriber = transcriber
+        self.saveAudioDir = saveAudioDir
     }
 
     private func setIcon(_ icon: NSImage) {
@@ -101,11 +103,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Pre-load model so first recording is fast
         setIcon(MenuBarIcon.processing())
-        let model = AppConfig.model
+        transcriber.preload(model: AppConfig.model)
         let transcriber = self.transcriber
         Task.detached {
+            // Wait for preload to finish before clearing the processing icon
             do {
-                try await transcriber.preload(model: model)
+                try await transcriber.waitUntilReady()
             } catch {
                 print("Failed to preload model: \(error)")
             }
@@ -169,7 +172,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func startRecording() {
-        let outputDir = FileManager.default.currentDirectoryPath + "/output"
+        let outputDir = saveAudioDir ?? NSTemporaryDirectory()
         try? FileManager.default.createDirectory(atPath: outputDir, withIntermediateDirectories: true)
 
         let timestamp = ISO8601DateFormatter().string(from: Date())
@@ -209,6 +212,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         let transcriber = self.transcriber
         let model = AppConfig.model
+        let deleteAfter = saveAudioDir == nil
         Task.detached {
             let result: String?
             do {
@@ -219,6 +223,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             } catch {
                 print("Transcription failed: \(error)")
                 result = nil
+            }
+            if deleteAfter {
+                try? FileManager.default.removeItem(at: url)
             }
             let output = result
             await MainActor.run { [weak self] in
@@ -264,7 +271,31 @@ enum Main {
     static func main() {
         let args = CommandLine.arguments
 
+        if args.contains("--help") || args.contains("-h") {
+            print("""
+                speak-clean — speech to text with filler word removal
+
+                Usage:
+                  speak-clean                          Run as menu bar app
+                  speak-clean --audio <file.wav>       Transcribe a file to stdout
+                  speak-clean --save-audio <dir>       Save recordings to <dir> instead of temp
+
+                Options:
+                  --audio <file>        Transcribe an audio file and exit
+                  --save-audio <dir>    Keep recorded WAV files in <dir>
+                  --help, -h            Show this help
+                """)
+            return
+        }
+
+        // Parse --save-audio
+        var saveAudioDir: String?
+        if let idx = args.firstIndex(of: "--save-audio"), idx + 1 < args.count {
+            saveAudioDir = args[idx + 1]
+        }
+
         if let audioIndex = args.firstIndex(of: "--audio"), audioIndex + 1 < args.count {
+            // CLI mode: transcribe a file and print to stdout
             let filePath = args[audioIndex + 1]
             let modelsDir = AppConfig.modelsDir
             let model = AppConfig.model
@@ -274,7 +305,8 @@ enum Main {
                 )
                 let t0 = CFAbsoluteTimeGetCurrent()
                 do {
-                    try await transcriber.preload(model: model)
+                    transcriber.preload(model: model)
+                    try await transcriber.waitUntilReady()
                     fputs("  preload:     \(String(format: "%.2f", CFAbsoluteTimeGetCurrent() - t0))s\n", stderr)
                     let url = URL(fileURLWithPath: filePath)
                     let text = try await transcriber.transcribe(audioFileURL: url, model: model)
@@ -287,17 +319,18 @@ enum Main {
                 }
                 exit(0)
             }
+            // dispatchMain() never returns — keeps the process alive for the Task above
             dispatchMain()
+        } else {
+            // App mode: synchronous main, preload via Task inside run loop
+            let app = NSApplication.shared
+            app.setActivationPolicy(.accessory)
+            let transcriber = Transcriber(
+                modelManager: ModelManager(modelsDir: AppConfig.modelsDir)
+            )
+            let delegate = AppDelegate(transcriber: transcriber, saveAudioDir: saveAudioDir)
+            app.delegate = delegate
+            app.run()
         }
-
-        // App mode: synchronous main, preload via Task inside run loop
-        let app = NSApplication.shared
-        app.setActivationPolicy(.accessory)
-        let transcriber = Transcriber(
-            modelManager: ModelManager(modelsDir: AppConfig.modelsDir)
-        )
-        let delegate = AppDelegate(transcriber: transcriber)
-        app.delegate = delegate
-        app.run()
     }
 }

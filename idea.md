@@ -9,58 +9,55 @@
 
 - **Swift Package Manager** project (`swift build` / `swift run`)
 - **Headless AppKit app** — no window, no dock icon (`.accessory` activation policy)
-  - Gives access to `NSEvent`, `NSPasteboard`, `NSWorkspace`
-  - Proper app bundle for Accessibility permissions and distribution
-- **whisper.cpp** bundled as static library (`libwhisper.a`)
-  - Linked via C bridging header into Swift
-  - CoreML/Metal acceleration on Apple Silicon
-  - Model file (ggml-base.en) bundled in app resources
-  - Reference: https://huggingface.co/openai/whisper-large-v3-turbo
-- **Shortcut: Option+Space** — toggle recording (press to start, press again to stop)
-  - On start: notification sound/visual feedback, begin mic capture
-  - On stop: save audio to output folder, transcribe → filter → paste into focused text input
-  - `NSEvent.addGlobalMonitorForEvents` for keyDown
-  - Requires Accessibility permission
-- **Filler word filtering** via LLM post-processing on transcription output
-  - **llama.cpp** bundled as static library (same pattern as whisper.cpp)
-  - C bridging header into Swift, Metal acceleration
-  - **Qwen 2.5 0.5B Instruct** (GGUF Q4, ~400MB) — smallest model with reliable instruction following
+  - Menu bar icon with status (idle / recording / processing)
+  - Configurable shortcut via UserDefaults (default: Option+Space)
+- **SwiftWhisper** SPM dependency (wraps whisper.cpp)
+  - CoreML acceleration on Apple Silicon (Neural Engine) — ~5x faster than CPU
+  - Models auto-downloaded from HuggingFace on first use (GGML + CoreML encoder)
+  - Default model: `base.en` (~142 MB GGML + ~36 MB CoreML encoder)
+- **Filler word filtering** via LLM post-processing on transcription output (planned)
+  - **llama.cpp** bundled as static library
+  - **Qwen 2.5 0.5B Instruct** (GGUF Q4, ~400MB)
   - Fallback: Qwen 2.5 1.5B if 0.5B isn't accurate enough
-  - System prompt: "Rewrite removing filler words and verbal hesitations. Keep meaning and wording otherwise identical."
   - Pipeline: mic → whisper.cpp → llama.cpp → paste
 - **Paste to active app** via `NSPasteboard` + simulated Cmd+V
   - Saves and restores previous clipboard contents
+- **`--audio file.wav`** CLI mode for profiling — same code path as app mode
 
 ## Status
 
 ### Done
-- Swift Package Manager project with headless AppKit app (`.accessory` activation policy)
-- Menu bar icon (🎙 idle / ⏺ recording) via `NSStatusItem`
-- Global shortcut (Option+Space) via `NSEvent.addGlobalMonitorForEvents` + local monitor
-- Mic capture to 16kHz mono WAV files in `output/`
+- Headless AppKit app with menu bar icon (idle / recording / processing states)
+- Configurable shortcut via UserDefaults (default: Option+Space)
+- Mic capture to 16kHz mono WAV → whisper transcription → regex cleanup → paste
+- CoreML (ANE) acceleration — ~2s transcription for 37s audio on M-series
+- Auto-download GGML model + CoreML encoder from HuggingFace with progress
+- Model swappable via UserDefaults `model` key (auto-downloads on change)
+- `--audio file.wav` CLI mode for profiling (same pipeline as app)
 - Sound feedback (Tink on start, Pop on stop)
-- Paste to active app via `NSPasteboard` + simulated Cmd+V (currently pastes "hello world" placeholder)
 - Clipboard save/restore around paste
+- Menu bar: Edit Dictionary, Clean Model Cache, Quit
 
 ### Next
-- Integrate llama.cpp + Qwen 2.5 0.5B for filler word filtering
+- Integrate llama.cpp + Qwen 2.5 0.5B for filler word filtering (replace regex TextCleaner)
 - Wire full pipeline: mic → whisper.cpp → llama.cpp → paste
-- **Menu bar reload button** — dropdown action that:
-  - Reloads `config.json`
-  - Re-downloads model if previous download failed
-  - Download supports resume from last stopping point (HTTP Range requests)
-- **Configurable shortcut** — UserDefaults as source of truth + menu bar item to change it
-  - Library: **KeyboardShortcuts** (sindresorhus/KeyboardShortcuts) — Swift, SPM, actively maintained
-  - No sync layer needed — KeyboardShortcuts uses UserDefaults natively
-  - Menu bar dropdown item opens key capture dialog to set new shortcut
+- **Robust model download manager** — unified design covering:
+  - **Resume**: check for `.download` temp file, send `Range: bytes=<size>-` header, handle 206/416
+  - **Checksum**: fetch SHA256 from HuggingFace API, verify after download, reject corrupt files
+  - **Abandon**: delete temp `.download` file + any corrupt final file on checksum mismatch
+  - **Reuse cached**: skip download if final file exists and checksum matches
+  - Applies to both GGML model and CoreML encoder zip
 
 ### TODO
 - Show status line in menu-bar dropdown (idle / recording / transcribing)
 
 ### Notes
-- `SpeakCleanCore/TextCleaner` has a regex-based filler/self-correction cleaner with test suite as spec; implementation will be swapped for LLM post-processing.
-- Models cached at `~/Library/Application Support/SpeakClean/models/`
-- Changing model in config auto-downloads new model on next use
+- `SpeakCleanCore/TextCleaner` — regex-based filler/self-correction cleaner with test suite as spec; will be swapped for LLM post-processing
+- Models cached at `~/Library/Application Support/SpeakClean/models/` (GGML + CoreML encoder)
+- CoreML encoder auto-downloaded from `huggingface.co/ggerganov/whisper.cpp`, placed alongside GGML model
+- Whisper auto-uses CoreML if `.mlmodelc` exists, falls back to CPU if not — no toggle needed
+- `Transcriber` is `@unchecked Sendable` (not an actor) due to SwiftWhisper Sendable conflicts with Swift 6.2
+- `--audio` CLI uses `dispatchMain()` + `exit(0)` instead of `DispatchSemaphore` — semaphore blocks main thread which CoreML needs
 
 ## Config
 

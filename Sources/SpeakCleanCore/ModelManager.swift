@@ -21,13 +21,11 @@ public final class ModelManager: Sendable {
             )
         }
 
-        // CoreML encoder download disabled — SwiftWhisper's CoreML integration
-        // hangs during transcription. CPU + Accelerate fallback works fine.
-        // TODO: re-enable when SwiftWhisper fixes CoreML inference
-        // let coremlDir = modelsDir.appendingPathComponent("ggml-\(model)-encoder.mlmodelc")
-        // if !FileManager.default.fileExists(atPath: coremlDir.path) {
-        //     try await downloadCoreML(model: model)
-        // }
+        // Download CoreML encoder for ANE acceleration if not present
+        let coremlDir = modelsDir.appendingPathComponent("ggml-\(model)-encoder.mlmodelc")
+        if !FileManager.default.fileExists(atPath: coremlDir.path) {
+            try await downloadCoreML(model: model)
+        }
 
         return localURL
     }

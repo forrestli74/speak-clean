@@ -5,34 +5,45 @@ public final class Transcriber: @unchecked Sendable {
     private let modelManager: ModelManager
     private let cleaner = TextCleaner()
     private var whisper: Whisper?
-    private var currentModel: String?
+    private var loadTask: Task<Void, Error>?
+    private var loadedModel: String?
 
     public init(modelManager: ModelManager) {
         self.modelManager = modelManager
     }
 
-    public func preload(model: String) async throws {
-        let url = try await modelManager.modelURL(for: model)
-        var params = WhisperParams(strategy: .greedy)
-        params.language = .english
-        // Use half the cores — CoreML handles encoder on ANE, threads are for decoder only
-        params.n_threads = max(1, Int32(ProcessInfo.processInfo.activeProcessorCount / 2))
-        params.print_progress = false
-        params.print_timestamps = false
-        whisper = Whisper(fromFileURL: url, withParams: params)
-        currentModel = model
-        print("Model loaded: ggml-\(model).bin (threads: \(params.n_threads))")
+    /// Waits for any in-progress model load to finish.
+    public func waitUntilReady() async throws {
+        try await loadTask?.value
+    }
+
+    /// Starts loading the model. Returns immediately — callers await via transcribe() or waitUntilReady().
+    public func preload(model: String) {
+        if loadedModel == model, loadTask != nil { return }
+        loadedModel = model
+        loadTask = Task { [self] in
+            let url = try await modelManager.modelURL(for: model)
+            var params = WhisperParams(strategy: .greedy)
+            params.language = .english
+            // Use half the cores — CoreML handles encoder on ANE, threads are for decoder only
+            params.n_threads = max(1, Int32(ProcessInfo.processInfo.activeProcessorCount / 2))
+            params.print_progress = false
+            params.print_timestamps = false
+            whisper = Whisper(fromFileURL: url, withParams: params)
+            print("Model loaded: ggml-\(model).bin (threads: \(params.n_threads))")
+        }
     }
 
     public func transcribe(audioFileURL: URL, model: String) async throws -> String {
         var t = CFAbsoluteTimeGetCurrent()
 
         // Reload model if changed or first use
-        if whisper == nil || currentModel != model {
-            try await preload(model: model)
-            fputs("  model load: \(String(format: "%.2f", CFAbsoluteTimeGetCurrent() - t))s\n", stderr)
-            t = CFAbsoluteTimeGetCurrent()
+        if loadedModel != model || loadTask == nil {
+            preload(model: model)
         }
+        try await loadTask?.value
+        fputs("  model ready: \(String(format: "%.2f", CFAbsoluteTimeGetCurrent() - t))s\n", stderr)
+        t = CFAbsoluteTimeGetCurrent()
 
         let audioFrames = try loadAudioFrames(from: audioFileURL)
         fputs("  audio load:  \(String(format: "%.2f", CFAbsoluteTimeGetCurrent() - t))s\n", stderr)
@@ -60,7 +71,8 @@ public final class Transcriber: @unchecked Sendable {
             throw TranscriberError.audioFormatError
         }
 
-        let frameCount = AVAudioFrameCount(file.length)
+        // Convert frame count to target sample rate (handles non-16kHz sources via --audio)
+        let frameCount = AVAudioFrameCount(Double(file.length) * 16000.0 / file.fileFormat.sampleRate)
         guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount) else {
             throw TranscriberError.audioBufferError
         }
