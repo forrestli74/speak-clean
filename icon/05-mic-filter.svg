@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 36 36" width="36" height="36">
+  <!-- Mic top -->
+  <rect x="13" y="3" width="10" height="14" rx="5" fill="black"/>
+  <!-- Filter/funnel below mic -->
+  <path d="M8 22h20l-7 10h-6z" fill="none" stroke="black" stroke-width="2.5" stroke-linejoin="round"/>
+</svg>

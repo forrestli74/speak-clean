@@ -29,9 +29,7 @@ public final class Transcriber: @unchecked Sendable {
 
         // Reload model if changed or first use
         if whisper == nil || currentModel != model {
-            let url = try await modelManager.modelURL(for: model)
-            whisper = Whisper(fromFileURL: url)
-            currentModel = model
+            try await preload(model: model)
             fputs("  model load: \(String(format: "%.2f", CFAbsoluteTimeGetCurrent() - t))s\n", stderr)
             t = CFAbsoluteTimeGetCurrent()
         }
@@ -40,7 +38,8 @@ public final class Transcriber: @unchecked Sendable {
         fputs("  audio load:  \(String(format: "%.2f", CFAbsoluteTimeGetCurrent() - t))s\n", stderr)
         t = CFAbsoluteTimeGetCurrent()
 
-        let segments = try await whisper!.transcribe(audioFrames: audioFrames)
+        guard let whisper else { throw TranscriberError.modelNotLoaded }
+        let segments = try await whisper.transcribe(audioFrames: audioFrames)
         fputs("  transcribe:  \(String(format: "%.2f", CFAbsoluteTimeGetCurrent() - t))s\n", stderr)
 
         let rawText = segments.map(\.text).joined(separator: " ")
@@ -78,11 +77,13 @@ public final class Transcriber: @unchecked Sendable {
 public enum TranscriberError: Error, LocalizedError {
     case audioFormatError
     case audioBufferError
+    case modelNotLoaded
 
     public var errorDescription: String? {
         switch self {
         case .audioFormatError: return "Failed to create audio format"
         case .audioBufferError: return "Failed to read audio buffer"
+        case .modelNotLoaded: return "Whisper model not loaded"
         }
     }
 }

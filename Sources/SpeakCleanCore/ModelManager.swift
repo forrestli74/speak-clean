@@ -68,59 +68,35 @@ public final class ModelManager: Sendable {
 
     private func download(filename: String, to destination: URL, baseURL: String) async throws {
         let url = URL(string: "\(baseURL)\(filename)")!
+        let tempURL = destination.appendingPathExtension("download")
+
+        // Clean up temp file on failure
+        defer {
+            if FileManager.default.fileExists(atPath: tempURL.path),
+               !FileManager.default.fileExists(atPath: destination.path) {
+                try? FileManager.default.removeItem(at: tempURL)
+            }
+        }
 
         print("Downloading \(filename)...")
-        let (bytes, response) = try await URLSession.shared.bytes(from: url)
+        let (downloadedURL, response) = try await URLSession.shared.download(from: url)
 
         guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
             throw ModelError.downloadFailed(filename)
         }
 
+        // Move to temp location first (download file is auto-deleted by URLSession)
+        try FileManager.default.moveItem(at: downloadedURL, to: tempURL)
+
         let totalBytes = httpResponse.expectedContentLength
-        let tempURL = destination.appendingPathExtension("download")
-        FileManager.default.createFile(atPath: tempURL.path, contents: nil)
-        let handle = try FileHandle(forWritingTo: tempURL)
-
-        var downloadedBytes: Int64 = 0
-        var buffer = Data()
-        let chunkSize = 1024 * 1024 // flush every 1MB
-
-        for try await byte in bytes {
-            buffer.append(byte)
-            if buffer.count >= chunkSize {
-                downloadedBytes += Int64(buffer.count)
-                handle.write(buffer)
-                buffer.removeAll(keepingCapacity: true)
-                printProgress(downloaded: downloadedBytes, total: totalBytes, filename: filename)
-            }
-        }
-
-        // Write remaining bytes
-        if !buffer.isEmpty {
-            downloadedBytes += Int64(buffer.count)
-            handle.write(buffer)
-        }
-        handle.closeFile()
-
-        printProgress(downloaded: downloadedBytes, total: totalBytes, filename: filename)
-        print("") // newline after progress
+        let mbTotal = Double(totalBytes) / (1024 * 1024)
+        print("Downloaded \(filename): \(String(format: "%.1f", mbTotal)) MB")
 
         // Atomic move to final location
         try FileManager.default.moveItem(at: tempURL, to: destination)
         print("Model ready: \(filename)")
     }
 
-    private func printProgress(downloaded: Int64, total: Int64, filename: String) {
-        let mbDown = Double(downloaded) / (1024 * 1024)
-        if total > 0 {
-            let mbTotal = Double(total) / (1024 * 1024)
-            let pct = Double(downloaded) / Double(total) * 100
-            print("\rDownloading \(filename)... \(String(format: "%.1f", mbDown)) MB / \(String(format: "%.1f", mbTotal)) MB (\(String(format: "%.1f", pct))%)", terminator: "")
-        } else {
-            print("\rDownloading \(filename)... \(String(format: "%.1f", mbDown)) MB", terminator: "")
-        }
-        fflush(stdout)
-    }
 }
 
 public enum ModelError: Error, LocalizedError {

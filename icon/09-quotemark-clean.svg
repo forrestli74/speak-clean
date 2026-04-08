@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 36 36" width="36" height="36">
+  <!-- Clean open/close quotation marks — represents cleaned speech -->
+  <path d="M6 10c0-3 3-6 7-6v4c-2 0-3 1-3 2h3v7H6z" fill="black"/>
+  <path d="M18 10c0-3 3-6 7-6v4c-2 0-3 1-3 2h3v7H18z" fill="black"/>
+  <!-- Sparkle below -->
+  <path d="M18 26l1.5 3 3 1.5-3 1.5-1.5 3-1.5-3-3-1.5 3-1.5z" fill="black"/>
+</svg>
