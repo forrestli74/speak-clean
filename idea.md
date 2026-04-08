@@ -1,6 +1,6 @@
 # speak-clean
 
-- Free, open-source Typeless alternative (Mac-only)
+- Free, open-source Typeless alternative (Apple Silicon Mac only)
 - Speech to text for typing, filters filler words (um, uh, like, you know, etc.)
 - Minimal setup and memory footprint
 - Single app bundle, no external dependencies
@@ -43,15 +43,32 @@
 - Clipboard save/restore around paste
 
 ### Next
-- Integrate whisper.cpp for transcription (replace "hello world" placeholder with actual speech-to-text)
 - Integrate llama.cpp + Qwen 2.5 0.5B for filler word filtering
 - Wire full pipeline: mic → whisper.cpp → llama.cpp → paste
+- **Menu bar reload button** — dropdown action that:
+  - Reloads `config.json`
+  - Re-downloads model if previous download failed
+  - Download supports resume from last stopping point (HTTP Range requests)
+- **Configurable shortcut** — UserDefaults as source of truth + menu bar item to change it
+  - Library: **KeyboardShortcuts** (sindresorhus/KeyboardShortcuts) — Swift, SPM, actively maintained
+  - No sync layer needed — KeyboardShortcuts uses UserDefaults natively
+  - Menu bar dropdown item opens key capture dialog to set new shortcut
 
 ### TODO
-- Resume interrupted model downloads (HTTP Range requests)
+- Show status line in menu-bar dropdown (idle / recording / transcribing)
 
 ### Notes
 - `SpeakCleanCore/TextCleaner` has a regex-based filler/self-correction cleaner with test suite as spec; implementation will be swapped for LLM post-processing.
-- Model configured via `config.json` key `model` (e.g. `{"model": "base.en"}`), stored at `~/Library/Application Support/SpeakClean/config.json`
 - Models cached at `~/Library/Application Support/SpeakClean/models/`
 - Changing model in config auto-downloads new model on next use
+
+## Config
+
+- **Bundle ID**: `local.speakclean`
+- **UserDefaults** (`~/Library/Preferences/local.speakclean.plist`) for app settings:
+  - `shortcut` — keyboard shortcut string (default: `"option+space"`)
+  - `model` — whisper model name (default: `"base.en"`)
+- **Dictionary** (`~/Library/Application Support/SpeakClean/dictionary.txt`) — user-editable text file, one entry per line
+  - Separate from plist because it's user data, not a preference
+- Defaults registered via `UserDefaults.standard.register(defaults:)` at launch — no default file on disk
+- KeyboardShortcuts library uses UserDefaults natively — no sync layer needed

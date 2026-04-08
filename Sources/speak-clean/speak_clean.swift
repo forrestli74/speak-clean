@@ -1,11 +1,17 @@
 import AppKit
 import AVFoundation
+import SpeakCleanCore
 
 @MainActor
 class AppDelegate: NSObject, NSApplicationDelegate {
     private var audioRecorder: AVAudioRecorder?
     private var isRecording = false
     private var statusItem: NSStatusItem?
+    let transcriber: Transcriber
+
+    init(transcriber: Transcriber) {
+        self.transcriber = transcriber
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Menu bar icon for visual feedback
@@ -14,7 +20,22 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem?.menu = buildMenu()
 
         setupGlobalShortcut()
-        print("speak-clean running. Press Option+Space to toggle recording.")
+
+        // Pre-load model so first recording is fast
+        statusItem?.button?.title = "⏳"
+        let model = AppConfig.model
+        let transcriber = self.transcriber
+        Task.detached {
+            do {
+                try await transcriber.preload(model: model)
+            } catch {
+                print("Failed to preload model: \(error)")
+            }
+            await MainActor.run { [weak self] in
+                self?.statusItem?.button?.title = "🎙"
+                print("speak-clean running. Press Option+Space to toggle recording.")
+            }
+        }
     }
 
     private func buildMenu() -> NSMenu {
@@ -31,8 +52,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func cleanModelCache() {
-        // TODO: implement model cache cleanup
-        print("Clean model cache: not yet implemented")
+        let manager = ModelManager(modelsDir: AppConfig.modelsDir)
+        do {
+            try manager.cleanCache()
+        } catch {
+            print("Failed to clean model cache: \(error)")
+        }
     }
 
     private func setupGlobalShortcut() {
@@ -92,23 +117,45 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func stopRecording() {
         audioRecorder?.stop()
         isRecording = false
-        statusItem?.button?.title = "🎙"
 
-        if let url = audioRecorder?.url {
-            print("Recording saved: \(url.path)")
-        }
+        guard let url = audioRecorder?.url else { return }
+        print("Recording saved: \(url.path)")
 
         NSSound(named: .init("Pop"))?.play()
-        pasteHelloWorld()
+        statusItem?.button?.title = "⏳"
+
+        let transcriber = self.transcriber
+        let model = AppConfig.model
+        Task.detached {
+            let result: String?
+            do {
+                let text = try await transcriber.transcribe(
+                    audioFileURL: url, model: model
+                )
+                result = text.isEmpty ? nil : text
+            } catch {
+                print("Transcription failed: \(error)")
+                result = nil
+            }
+            let output = result
+            await MainActor.run { [weak self] in
+                if let text = output {
+                    print("Transcription: \(text)")
+                    self?.pasteText(text)
+                }
+                self?.statusItem?.button?.title = "🎙"
+            }
+        }
+
         audioRecorder = nil
     }
 
-    private func pasteHelloWorld() {
+    private func pasteText(_ text: String) {
         let pasteboard = NSPasteboard.general
         let previousContents = pasteboard.string(forType: .string)
 
         pasteboard.clearContents()
-        pasteboard.setString("hello world", forType: .string)
+        pasteboard.setString(text, forType: .string)
 
         // Simulate Cmd+V
         let source = CGEventSource(stateID: .hidSystemState)
@@ -132,9 +179,44 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 @main
 enum Main {
     static func main() {
+        let args = CommandLine.arguments
+
+        if let audioIndex = args.firstIndex(of: "--audio"), audioIndex + 1 < args.count {
+            // CLI mode: async is fine, no run loop
+            let filePath = args[audioIndex + 1]
+            let modelsDir = AppConfig.modelsDir
+            let model = AppConfig.model
+            let sem = DispatchSemaphore(value: 0)
+            Task.detached {
+                let transcriber = Transcriber(
+                    modelManager: ModelManager(modelsDir: modelsDir)
+                )
+                let t0 = CFAbsoluteTimeGetCurrent()
+                do {
+                    try await transcriber.preload(model: model)
+                    fputs("  preload:     \(String(format: "%.2f", CFAbsoluteTimeGetCurrent() - t0))s\n", stderr)
+                    let url = URL(fileURLWithPath: filePath)
+                    let text = try await transcriber.transcribe(audioFileURL: url, model: model)
+                    let elapsed = CFAbsoluteTimeGetCurrent() - t0
+                    fputs("[\(String(format: "%.2f", elapsed))s total]\n", stderr)
+                    print(text)
+                } catch {
+                    fputs("Error: \(error)\n", stderr)
+                    exit(1)
+                }
+                sem.signal()
+            }
+            sem.wait()
+            return
+        }
+
+        // App mode: synchronous main, preload via Task inside run loop
         let app = NSApplication.shared
         app.setActivationPolicy(.accessory)
-        let delegate = AppDelegate()
+        let transcriber = Transcriber(
+            modelManager: ModelManager(modelsDir: AppConfig.modelsDir)
+        )
+        let delegate = AppDelegate(transcriber: transcriber)
         app.delegate = delegate
         app.run()
     }
