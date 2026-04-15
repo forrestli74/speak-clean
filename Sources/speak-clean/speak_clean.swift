@@ -76,12 +76,15 @@ enum MenuBarIcon {
     }
 }
 
+// MARK: - App Delegate (menu bar lifecycle + recording flow)
+
 @MainActor
 class AppDelegate: NSObject, NSApplicationDelegate {
     private var audioRecorder: AVAudioRecorder?
     private var isRecording = false
     private var statusItem: NSStatusItem?
     let transcriber: Transcriber
+    /// If set, recordings are kept here instead of being deleted after transcription
     let saveAudioDir: String?
 
     init(transcriber: Transcriber, saveAudioDir: String? = nil) {
@@ -101,22 +104,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         setupGlobalShortcut()
 
-        // Pre-load model so first recording is fast
-        setIcon(MenuBarIcon.processing())
-        transcriber.preload(model: AppConfig.model)
-        let transcriber = self.transcriber
-        Task.detached {
-            // Wait for preload to finish before clearing the processing icon
-            do {
-                try await transcriber.waitUntilReady()
-            } catch {
-                print("Failed to preload model: \(error)")
-            }
-            await MainActor.run { [weak self] in
-                self?.setIcon(MenuBarIcon.idle())
-                print("speak-clean running. Press Option+Space to toggle recording.")
-            }
-        }
+        // TODO(Task 6): rewrite using AppController
+        setIcon(MenuBarIcon.idle())
+        print("speak-clean running. Press Option+Space to toggle recording.")
     }
 
     private func buildMenu() -> NSMenu {
@@ -141,6 +131,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    // Register both global (other apps focused) and local (our app focused) key monitors
     private func setupGlobalShortcut() {
         guard let shortcut = AppConfig.parsedShortcut else {
             print("Invalid shortcut: \(AppConfig.shortcut)")
@@ -171,10 +162,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// Record 16kHz mono WAV — the format whisper.cpp expects
     private func startRecording() {
         let outputDir = saveAudioDir ?? NSTemporaryDirectory()
         try? FileManager.default.createDirectory(atPath: outputDir, withIntermediateDirectories: true)
 
+        // Timestamp in filename for --save-audio mode
         let timestamp = ISO8601DateFormatter().string(from: Date())
             .replacingOccurrences(of: ":", with: "-")
         let filePath = outputDir + "/recording-\(timestamp).wav"
@@ -210,20 +203,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         NSSound(named: .init("Pop"))?.play()
         setIcon(MenuBarIcon.processing())
 
-        let transcriber = self.transcriber
-        let model = AppConfig.model
         let deleteAfter = saveAudioDir == nil
         Task.detached {
             let result: String?
-            do {
-                let text = try await transcriber.transcribe(
-                    audioFileURL: url, model: model
-                )
-                result = text.isEmpty ? nil : text
-            } catch {
-                print("Transcription failed: \(error)")
-                result = nil
-            }
+            // TODO(Task 6): rewrite using AppController / ManagedModel<Whisper>
+            result = nil
             if deleteAfter {
                 try? FileManager.default.removeItem(at: url)
             }
@@ -240,14 +224,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         audioRecorder = nil
     }
 
+    /// Paste text into the active app by temporarily hijacking the clipboard
     private func pasteText(_ text: String) {
+        // Save current clipboard so we can restore it after pasting
         let pasteboard = NSPasteboard.general
         let previousContents = pasteboard.string(forType: .string)
 
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)
 
-        // Simulate Cmd+V
+        // Synthesize Cmd+V keypress via CGEvent
         let source = CGEventSource(stateID: .hidSystemState)
         let keyDown = CGEvent(keyboardEventSource: source, virtualKey: 0x09, keyDown: true) // 'v'
         let keyUp = CGEvent(keyboardEventSource: source, virtualKey: 0x09, keyDown: false)
@@ -265,6 +251,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 }
+
+// MARK: - Entry Point (CLI vs menu bar app)
 
 @main
 enum Main {
@@ -295,39 +283,14 @@ enum Main {
         }
 
         if let audioIndex = args.firstIndex(of: "--audio"), audioIndex + 1 < args.count {
-            // CLI mode: transcribe a file and print to stdout
-            let filePath = args[audioIndex + 1]
-            let modelsDir = AppConfig.modelsDir
-            let model = AppConfig.model
-            Task.detached {
-                let transcriber = Transcriber(
-                    modelManager: ModelManager(modelsDir: modelsDir)
-                )
-                let t0 = CFAbsoluteTimeGetCurrent()
-                do {
-                    transcriber.preload(model: model)
-                    try await transcriber.waitUntilReady()
-                    fputs("  preload:     \(String(format: "%.2f", CFAbsoluteTimeGetCurrent() - t0))s\n", stderr)
-                    let url = URL(fileURLWithPath: filePath)
-                    let text = try await transcriber.transcribe(audioFileURL: url, model: model)
-                    let elapsed = CFAbsoluteTimeGetCurrent() - t0
-                    fputs("[\(String(format: "%.2f", elapsed))s total]\n", stderr)
-                    print(text)
-                } catch {
-                    fputs("Error: \(error)\n", stderr)
-                    exit(1)
-                }
-                exit(0)
-            }
-            // dispatchMain() never returns — keeps the process alive for the Task above
-            dispatchMain()
+            // TODO(Task 6): rewrite CLI mode using AppController
+            fputs("--audio mode not yet implemented in this build.\n", stderr)
+            exit(1)
         } else {
             // App mode: synchronous main, preload via Task inside run loop
             let app = NSApplication.shared
             app.setActivationPolicy(.accessory)
-            let transcriber = Transcriber(
-                modelManager: ModelManager(modelsDir: AppConfig.modelsDir)
-            )
+            let transcriber = Transcriber()
             let delegate = AppDelegate(transcriber: transcriber, saveAudioDir: saveAudioDir)
             app.delegate = delegate
             app.run()
