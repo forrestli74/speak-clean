@@ -20,7 +20,7 @@ let package = Package(
         ),
         .testTarget(
             name: "SpeakCleanTests",
-            dependencies: ["SpeakCleanCore"]
+            dependencies: ["SpeakCleanCore", "speak-clean"]
         ),
     ]
 )
