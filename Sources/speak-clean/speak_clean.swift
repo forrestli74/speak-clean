@@ -1,19 +1,19 @@
 import AppKit
 import AVFoundation
 import SpeakCleanCore
+import SwiftWhisper
 
 // MARK: - Menu Bar Icons
 
 enum MenuBarIcon {
     /// Idle: I-beam cursor + waveform bars
     static func idle(height: CGFloat = 18) -> NSImage {
-        let width = height // square
+        let width = height
         let scale = height / 36.0
         let img = NSImage(size: NSSize(width: width, height: height), flipped: true) { rect in
             NSColor.black.setStroke()
 
             let lw: CGFloat = 2.5 * scale
-            // I-beam cursor
             let cursor = NSBezierPath()
             cursor.lineWidth = lw
             cursor.lineCapStyle = .round
@@ -25,7 +25,6 @@ enum MenuBarIcon {
             cursor.line(to: NSPoint(x: 10*scale, y: 30*scale))
             cursor.stroke()
 
-            // Waveform bars
             let bars: [(x: CGFloat, y1: CGFloat, y2: CGFloat)] = [
                 (16, 14, 22), (21, 8, 28), (26, 11, 25), (31, 14, 22),
             ]
@@ -76,19 +75,15 @@ enum MenuBarIcon {
     }
 }
 
-// MARK: - App Delegate (menu bar lifecycle + recording flow)
-
 @MainActor
 class AppDelegate: NSObject, NSApplicationDelegate {
     private var audioRecorder: AVAudioRecorder?
-    private var isRecording = false
     private var statusItem: NSStatusItem?
-    let transcriber: Transcriber
-    /// If set, recordings are kept here instead of being deleted after transcription
+    let controller: AppController
     let saveAudioDir: String?
 
-    init(transcriber: Transcriber, saveAudioDir: String? = nil) {
-        self.transcriber = transcriber
+    init(controller: AppController, saveAudioDir: String? = nil) {
+        self.controller = controller
         self.saveAudioDir = saveAudioDir
     }
 
@@ -97,16 +92,21 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // Menu bar icon for visual feedback
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        setIcon(MenuBarIcon.idle())
+        setIcon(MenuBarIcon.processing())
         statusItem?.menu = buildMenu()
-
         setupGlobalShortcut()
 
-        // TODO(Task 6): rewrite using AppController
-        setIcon(MenuBarIcon.idle())
-        print("speak-clean running. Press Option+Space to toggle recording.")
+        controller.onStateChange = { [weak self] state in
+            switch state {
+            case .notReady: self?.setIcon(MenuBarIcon.processing())
+            case .ready: self?.setIcon(MenuBarIcon.idle())
+            case .busy: break
+            case .error: self?.setIcon(MenuBarIcon.idle())
+            }
+        }
+
+        controller.reset()
     }
 
     private func buildMenu() -> NSMenu {
@@ -123,15 +123,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func cleanModelCache() {
-        let manager = ModelManager(modelsDir: AppConfig.modelsDir)
         do {
-            try manager.cleanCache()
+            try controller.clearCache()
         } catch {
             print("Failed to clean model cache: \(error)")
         }
     }
 
-    // Register both global (other apps focused) and local (our app focused) key monitors
     private func setupGlobalShortcut() {
         guard let shortcut = AppConfig.parsedShortcut else {
             print("Invalid shortcut: \(AppConfig.shortcut)")
@@ -155,19 +153,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func toggleRecording() {
-        if isRecording {
+        if audioRecorder != nil {
             stopRecording()
         } else {
             startRecording()
         }
     }
 
-    /// Record 16kHz mono WAV — the format whisper.cpp expects
     private func startRecording() {
+        guard controller.markBusy() else { return }
+
         let outputDir = saveAudioDir ?? NSTemporaryDirectory()
         try? FileManager.default.createDirectory(atPath: outputDir, withIntermediateDirectories: true)
 
-        // Timestamp in filename for --save-audio mode
         let timestamp = ISO8601DateFormatter().string(from: Date())
             .replacingOccurrences(of: ":", with: "-")
         let filePath = outputDir + "/recording-\(timestamp).wav"
@@ -184,65 +182,71 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         do {
             audioRecorder = try AVAudioRecorder(url: url, settings: settings)
             audioRecorder?.record()
-            isRecording = true
             setIcon(MenuBarIcon.recording())
             print("Recording started: \(filePath)")
             NSSound(named: .init("Tink"))?.play()
         } catch {
             print("Failed to start recording: \(error)")
+            controller.markDone()
         }
     }
 
     private func stopRecording() {
         audioRecorder?.stop()
-        isRecording = false
-
         guard let url = audioRecorder?.url else { return }
-        print("Recording saved: \(url.path)")
+        audioRecorder = nil
 
+        print("Recording saved: \(url.path)")
         NSSound(named: .init("Pop"))?.play()
         setIcon(MenuBarIcon.processing())
 
+        let controller = self.controller
         let deleteAfter = saveAudioDir == nil
-        Task.detached {
+        Task { @MainActor [weak self] in
             let result: String?
-            // TODO(Task 6): rewrite using AppController / ManagedModel<Whisper>
-            result = nil
+            do {
+                try await controller.whisper.waitUntilReady()
+                guard let whisper = controller.whisper.instance else {
+                    throw TranscriberError.modelNotLoaded
+                }
+                // Whisper is non-Sendable but handles its own thread safety;
+                // nonisolated(unsafe) lets us pass it to the nonisolated transcribe call.
+                nonisolated(unsafe) let unsafeWhisper = whisper
+                let text = try await controller.transcriber.transcribe(
+                    whisper: unsafeWhisper, audioFileURL: url
+                )
+                result = text.isEmpty ? nil : text
+            } catch {
+                print("Transcription failed: \(error)")
+                controller.markError(error)
+                result = nil
+            }
             if deleteAfter {
                 try? FileManager.default.removeItem(at: url)
             }
-            let output = result
-            await MainActor.run { [weak self] in
-                if let text = output {
-                    print("Transcription: \(text)")
-                    self?.pasteText(text)
-                }
-                self?.setIcon(MenuBarIcon.idle())
+            if let text = result {
+                print("Transcription: \(text)")
+                self?.pasteText(text)
             }
+            controller.markDone()
         }
-
-        audioRecorder = nil
     }
 
-    /// Paste text into the active app by temporarily hijacking the clipboard
     private func pasteText(_ text: String) {
-        // Save current clipboard so we can restore it after pasting
         let pasteboard = NSPasteboard.general
         let previousContents = pasteboard.string(forType: .string)
 
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)
 
-        // Synthesize Cmd+V keypress via CGEvent
         let source = CGEventSource(stateID: .hidSystemState)
-        let keyDown = CGEvent(keyboardEventSource: source, virtualKey: 0x09, keyDown: true) // 'v'
+        let keyDown = CGEvent(keyboardEventSource: source, virtualKey: 0x09, keyDown: true)
         let keyUp = CGEvent(keyboardEventSource: source, virtualKey: 0x09, keyDown: false)
         keyDown?.flags = .maskCommand
         keyUp?.flags = .maskCommand
         keyDown?.post(tap: .cghidEventTap)
         keyUp?.post(tap: .cghidEventTap)
 
-        // Restore previous clipboard after a short delay
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
             if let previous = previousContents {
                 pasteboard.clearContents()
@@ -251,8 +255,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 }
-
-// MARK: - Entry Point (CLI vs menu bar app)
 
 @main
 enum Main {
@@ -276,22 +278,52 @@ enum Main {
             return
         }
 
-        // Parse --save-audio
         var saveAudioDir: String?
         if let idx = args.firstIndex(of: "--save-audio"), idx + 1 < args.count {
             saveAudioDir = args[idx + 1]
         }
 
         if let audioIndex = args.firstIndex(of: "--audio"), audioIndex + 1 < args.count {
-            // TODO(Task 6): rewrite CLI mode using AppController
-            fputs("--audio mode not yet implemented in this build.\n", stderr)
-            exit(1)
+            // CLI mode: transcribe a file and print to stdout
+            let filePath = args[audioIndex + 1]
+            let modelsDir = AppConfig.modelsDir
+            let model = AppConfig.model
+            Task.detached {
+                let modelManager = ModelManager(modelsDir: modelsDir)
+                let transcriber = Transcriber()
+                let t0 = CFAbsoluteTimeGetCurrent()
+                do {
+                    let url = try await modelManager.modelURL(for: model)
+                    fputs("  download:    \(String(format: "%.2f", CFAbsoluteTimeGetCurrent() - t0))s\n", stderr)
+
+                    var params = WhisperParams(strategy: .greedy)
+                    params.language = .english
+                    params.n_threads = max(1, Int32(ProcessInfo.processInfo.activeProcessorCount / 2))
+                    params.print_progress = false
+                    params.print_timestamps = false
+                    let whisper = Whisper(fromFileURL: url, withParams: params)
+                    fputs("  model load:  \(String(format: "%.2f", CFAbsoluteTimeGetCurrent() - t0))s\n", stderr)
+
+                    let audioURL = URL(fileURLWithPath: filePath)
+                    let text = try await transcriber.transcribe(whisper: whisper, audioFileURL: audioURL)
+                    let elapsed = CFAbsoluteTimeGetCurrent() - t0
+                    fputs("[\(String(format: "%.2f", elapsed))s total]\n", stderr)
+                    print(text)
+                } catch {
+                    fputs("Error: \(error)\n", stderr)
+                    exit(1)
+                }
+                exit(0)
+            }
+            dispatchMain()
         } else {
-            // App mode: synchronous main, preload via Task inside run loop
+            // App mode
             let app = NSApplication.shared
             app.setActivationPolicy(.accessory)
-            let transcriber = Transcriber()
-            let delegate = AppDelegate(transcriber: transcriber, saveAudioDir: saveAudioDir)
+            let controller = AppController(
+                modelManager: ModelManager(modelsDir: AppConfig.modelsDir)
+            )
+            let delegate = AppDelegate(controller: controller, saveAudioDir: saveAudioDir)
             app.delegate = delegate
             app.run()
         }
