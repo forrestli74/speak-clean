@@ -1,10 +1,12 @@
 import Foundation
 
+/// Downloads and caches Whisper GGML models + CoreML encoders from HuggingFace
 public final class ModelManager: Sendable {
     private let modelsDir: URL
     private let downloadManager: DownloadManager
     private let session: URLSession
 
+    // HuggingFace repo hosting the pre-converted whisper.cpp models
     private static let hfRepo = "ggerganov/whisper.cpp"
     private static let hfBaseURL = "https://huggingface.co/\(hfRepo)/resolve/main/"
     private static let hfAPIURL = "https://huggingface.co/api/models/\(hfRepo)/tree/main"
@@ -15,6 +17,7 @@ public final class ModelManager: Sendable {
         self.downloadManager = DownloadManager(session: session)
     }
 
+    /// Returns local path to model file, downloading GGML + CoreML encoder if not cached
     public func modelURL(for model: String) async throws -> URL {
         let filename = "ggml-\(model).bin"
         let localURL = modelsDir.appendingPathComponent(filename)
@@ -26,6 +29,8 @@ public final class ModelManager: Sendable {
             let remoteURL = URL(string: "\(Self.hfBaseURL)\(filename)")!
             try await downloadManager.fetch(from: remoteURL, to: localURL, expectedSHA256: sha)
         }
+
+        try Task.checkCancellation()
 
         // CoreML encoder
         let coremlDir = modelsDir.appendingPathComponent("ggml-\(model)-encoder.mlmodelc")
@@ -68,6 +73,7 @@ public final class ModelManager: Sendable {
         }
     }
 
+    /// Download and extract the CoreML encoder (.mlmodelc) for ANE acceleration
     private func downloadCoreML(model: String) async throws {
         let zipFilename = "ggml-\(model)-encoder.mlmodelc.zip"
         let zipURL = modelsDir.appendingPathComponent(zipFilename)
@@ -75,6 +81,8 @@ public final class ModelManager: Sendable {
         let sha = await fetchSHA256(for: zipFilename)
         let remoteURL = URL(string: "\(Self.hfBaseURL)\(zipFilename)")!
         try await downloadManager.fetch(from: remoteURL, to: zipURL, expectedSHA256: sha)
+
+        try Task.checkCancellation()
 
         print("Extracting \(zipFilename)...")
         let process = Process()
