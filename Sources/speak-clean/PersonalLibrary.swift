@@ -1,5 +1,6 @@
 import AppKit
 
+/// App-wide configuration backed by UserDefaults and Application Support files
 @MainActor
 enum AppConfig {
     static let suiteName = "local.speakclean"
@@ -9,6 +10,7 @@ enum AppConfig {
         d.register(defaults: [
             "model": "base.en",
             "shortcut": "option+space",
+            "modelUnloadDelay": 300.0,
         ])
         return d
     }()
@@ -33,6 +35,11 @@ enum AppConfig {
         set { defaults.set(newValue, forKey: "shortcut") }
     }
 
+    static var modelUnloadDelay: TimeInterval {
+        get { defaults.double(forKey: "modelUnloadDelay") }
+        set { defaults.set(newValue, forKey: "modelUnloadDelay") }
+    }
+
     /// Parse shortcut string like "option+space" into modifiers and key code.
     /// Returns nil if the shortcut string is invalid.
     static var parsedShortcut: (modifiers: NSEvent.ModifierFlags, keyCode: UInt16)? {
@@ -54,6 +61,7 @@ enum AppConfig {
         return (modifiers, keyCode)
     }
 
+    /// macOS virtual key codes for shortcut parsing
     private static let keyCodeMap: [String: UInt16] = [
         "space": 49,
         "return": 36, "enter": 36,
@@ -71,6 +79,7 @@ enum AppConfig {
 
     // MARK: - Dictionary (text file)
 
+    /// Opens the user's custom dictionary file in their default text editor, creating it if needed
     static func openDictionary() {
         ensureAppSupportDir()
         if !FileManager.default.fileExists(atPath: dictionaryURL.path) {
