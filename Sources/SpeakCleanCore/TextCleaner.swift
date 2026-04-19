@@ -49,7 +49,9 @@ public enum TextCleaner {
             - Remove filler words: um, uh, ah, er, hmm, like (as filler), you know, \
               sort of, kind of, I mean
             - Resolve self-corrections: when the speaker changes direction \
-              mid-sentence, drop the abandoned words and keep the corrected phrase
+              mid-sentence, drop the abandoned words and keep the corrected phrase. \
+              The word "actually" (and "wait", "no", "I mean") often signals a \
+              correction — what follows replaces what came before.
 
             Keep everything else exactly as spoken: wording, punctuation, \
               capitalization, grammar, abbreviations, repetition for emphasis.
@@ -57,6 +59,12 @@ public enum TextCleaner {
             Examples:
             <transcript>How are you doing actually how are they doing</transcript>
             → how are they doing
+
+            <transcript>I want tea actually I want coffee</transcript>
+            → I want coffee
+
+            <transcript>let's meet Tuesday wait no Thursday</transcript>
+            → let's meet Thursday
 
             <transcript>um hey can you uh set a timer for five minutes</transcript>
             → hey can you set a timer for five minutes
