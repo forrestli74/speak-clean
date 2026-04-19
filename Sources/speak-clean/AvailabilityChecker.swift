@@ -5,7 +5,6 @@ import FoundationModels
 
 /// Runs availability checks in order: Apple Intelligence → mic permission →
 /// locale → STT assets. Any failure short-circuits with a user-facing reason.
-@Sendable
 func runAvailabilityChecks() async -> AppController.State {
     // 1. Apple Intelligence (Foundation Models)
     switch SystemLanguageModel.default.availability {

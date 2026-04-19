@@ -1,5 +1,4 @@
 import AVFoundation
-import CoreMedia
 import Speech
 
 @MainActor
@@ -11,6 +10,7 @@ public final class Transcriber {
     }
 
     private var session: Session?
+    private var accumulated: String = ""
 
     public init() {}
 
@@ -61,32 +61,23 @@ public final class Transcriber {
             throw Error(reason: "Audio engine failed: \(error.localizedDescription)")
         }
 
-        let buffer = TextBuffer()
-        let resultsTask = Task { @MainActor in
-            for try await result in transcriber.results {
-                let text = String(result.text.characters)
-                print("[stt result] isFinal=\(result.isFinal) text=\(text.isEmpty ? "(empty)" : text)")
-                if result.isFinal {
-                    buffer.text += text
-                }
+        accumulated = ""
+        let resultsTask = Task { @MainActor [weak self] in
+            for try await result in transcriber.results where result.isFinal {
+                self?.accumulated += String(result.text.characters)
             }
-            print("[stt results stream ended]")
         }
 
-        let analyzerTask: Task<CMTime?, Swift.Error> = Task {
+        let analyzerTask = Task {
             try await analyzer.analyzeSequence(inputSequence)
         }
-
-        print("[tap] hwFormat=\(hwFormat) targetFormat=\(targetFormat)")
 
         session = Session(
             analyzer: analyzer,
             engine: engine,
             inputBuilder: inputBuilder,
             resultsTask: resultsTask,
-            analyzerTask: analyzerTask,
-            buffer: buffer,
-            bridge: bridge
+            analyzerTask: analyzerTask
         )
     }
 
@@ -99,16 +90,11 @@ public final class Transcriber {
         s.engine.stop()
         s.inputBuilder.finish()
 
-        print("[stop] yielded \(s.bridge.yieldCount) buffers, totalOutFrames=\(s.bridge.totalOutFrames), failed=\(s.bridge.failedConversions)")
-
-        let lastSampleTime = try await s.analyzerTask.value
-        print("[stop] analyzerTask lastSampleTime = \(String(describing: lastSampleTime))")
+        _ = try await s.analyzerTask.value
         try await s.analyzer.finalizeAndFinishThroughEndOfInput()
-
         try? await s.resultsTask.value
-        let text = s.buffer.text.trimmingCharacters(in: .whitespaces)
-        print("[stop] accumulated text: \(text.isEmpty ? "(empty)" : text)")
-        return text
+
+        return accumulated.trimmingCharacters(in: .whitespaces)
     }
 
     /// Abort without returning text.
@@ -126,18 +112,11 @@ public final class Transcriber {
 
     // MARK: - Private
 
-    private final class TextBuffer {
-        var text: String = ""
-    }
-
     private final class TapBridge: @unchecked Sendable {
         let builder: AsyncStream<AnalyzerInput>.Continuation
         let converter: AVAudioConverter
         let targetFormat: AVAudioFormat
         let hwFormat: AVAudioFormat
-        var yieldCount = 0
-        var failedConversions = 0
-        var totalOutFrames: AVAudioFrameCount = 0
 
         init(builder: AsyncStream<AnalyzerInput>.Continuation,
              converter: AVAudioConverter,
@@ -153,7 +132,6 @@ public final class Transcriber {
             let ratio = targetFormat.sampleRate / hwFormat.sampleRate
             let outCapacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio) + 512
             guard let out = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: outCapacity) else {
-                failedConversions += 1
                 return
             }
             var provided = false
@@ -172,10 +150,6 @@ public final class Transcriber {
             }
             if err == nil && out.frameLength > 0 {
                 builder.yield(AnalyzerInput(buffer: out))
-                yieldCount += 1
-                totalOutFrames += out.frameLength
-            } else if err != nil {
-                failedConversions += 1
             }
         }
     }
@@ -186,7 +160,5 @@ public final class Transcriber {
         let inputBuilder: AsyncStream<AnalyzerInput>.Continuation
         let resultsTask: Task<Void, Swift.Error>
         let analyzerTask: Task<CMTime?, Swift.Error>
-        let buffer: TextBuffer
-        let bridge: TapBridge
     }
 }

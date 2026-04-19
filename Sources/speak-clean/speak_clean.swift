@@ -78,7 +78,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         setIcon(MenuBarIcon.processing())
 
         controller.onStateChange = { [weak self] state in
-            print("[state] \(state)")
             guard let self, !self.isRecording else { return }
             switch state {
             case .ready:
@@ -133,30 +132,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func startRecording() {
-        guard case .ready = controller.state, inFlight == nil else {
-            print("[hotkey] start ignored (state=\(controller.state), inFlight=\(inFlight != nil))")
-            return
-        }
-        print("[hotkey] start")
+        guard case .ready = controller.state, inFlight == nil else { return }
         Task { @MainActor in
             do {
                 try await controller.transcriber.start()
                 isRecording = true
                 setIcon(MenuBarIcon.recording())
-                print("[recording] started")
             } catch {
                 print("[recording] start failed: \(error)")
-                controller.markFailed("Recording start failed: \(error.localizedDescription)")
+                controller.setState(.notReady(reason: "Recording start failed: \(error.localizedDescription)"))
             }
         }
     }
 
     private func stopRecording() {
-        guard isRecording else {
-            print("[hotkey] stop ignored (not recording)")
-            return
-        }
-        print("[hotkey] stop")
+        guard isRecording else { return }
         isRecording = false
         setIcon(MenuBarIcon.processing())
 
@@ -165,17 +155,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             defer { self?.inFlight = nil }
             do {
                 let raw = try await controller.transcriber.stop()
-                print("[transcribed] \(raw.isEmpty ? "(empty)" : raw)")
-                let dictionary = AppConfig.loadDictionary()
-                let cleaned = try await TextCleaner.clean(raw, dictionary: dictionary)
-                print("[cleaned] \(cleaned.isEmpty ? "(empty)" : cleaned)")
+                let cleaned = try await TextCleaner.clean(raw, dictionary: AppConfig.loadDictionary())
                 if !cleaned.isEmpty {
                     self?.pasteText(cleaned)
                 }
                 self?.setIcon(MenuBarIcon.idle())
             } catch {
                 print("[transcription failed] \(error)")
-                controller.markFailed("Transcription failed: \(error.localizedDescription)")
+                controller.setState(.notReady(reason: "Transcription failed: \(error.localizedDescription)"))
             }
         }
     }

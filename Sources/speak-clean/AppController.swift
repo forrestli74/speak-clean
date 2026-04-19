@@ -11,10 +11,10 @@ final class AppController {
     private(set) var state: State = .notReady(reason: "Initializing…")
     var onStateChange: ((State) -> Void)?
 
-    private let check: @Sendable () async -> State
+    private let check: () async -> State
     let transcriber = Transcriber()
 
-    init(check: @escaping @Sendable () async -> State) {
+    init(check: @escaping () async -> State) {
         self.check = check
     }
 
@@ -22,16 +22,11 @@ final class AppController {
     /// Called on launch and from the "Reset" menu item.
     func reset() async {
         await transcriber.cancel()
-        transition(to: .notReady(reason: "Checking availability…"))
-        transition(to: await check())
+        setState(.notReady(reason: "Checking availability…"))
+        setState(await check())
     }
 
-    /// Record a failure (e.g., error thrown during a recording).
-    func markFailed(_ reason: String) {
-        transition(to: .notReady(reason: reason))
-    }
-
-    private func transition(to newState: State) {
+    func setState(_ newState: State) {
         state = newState
         onStateChange?(newState)
     }
