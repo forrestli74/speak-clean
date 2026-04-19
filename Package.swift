@@ -1,19 +1,11 @@
 // swift-tools-version: 6.2
-// The swift-tools-version declares the minimum version of Swift required to build this package.
-
 import PackageDescription
 
 let package = Package(
     name: "speak-clean",
-    platforms: [.macOS(.v13)],
-    dependencies: [
-        .package(url: "https://github.com/exPHAT/SwiftWhisper.git", branch: "master"),
-    ],
+    platforms: [.macOS(.v26)],
     targets: [
-        .target(
-            name: "SpeakCleanCore",
-            dependencies: ["SwiftWhisper"]
-        ),
+        .target(name: "SpeakCleanCore"),
         .executableTarget(
             name: "speak-clean",
             dependencies: ["SpeakCleanCore"]
