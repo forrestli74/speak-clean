@@ -6,7 +6,7 @@ struct TextCleanerInstructionsTests {
 
     @Test func emptyDictionaryHasNoPreserveBlock() {
         let s = TextCleaner.instructions(dictionary: [])
-        #expect(s.contains("Clean up a speech transcript"))
+        #expect(s.contains("text-transformation tool"))
         #expect(!s.contains("Preserve these spellings"))
     }
 
