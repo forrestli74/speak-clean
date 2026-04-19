@@ -1,6 +1,6 @@
 import AppKit
 
-/// App-wide configuration backed by UserDefaults and Application Support files
+/// App-wide configuration backed by UserDefaults and Application Support files.
 @MainActor
 enum AppConfig {
     static let suiteName = "local.speakclean"
@@ -8,9 +8,7 @@ enum AppConfig {
     private static let defaults: UserDefaults = {
         let d = UserDefaults(suiteName: suiteName)!
         d.register(defaults: [
-            "model": "base.en",
             "shortcut": "option+space",
-            "modelUnloadDelay": 300.0,
         ])
         return d
     }()
@@ -20,32 +18,19 @@ enum AppConfig {
         return base.appendingPathComponent("SpeakClean")
     }()
 
-    static let modelsDir: URL = appSupportDir.appendingPathComponent("models")
     static let dictionaryURL: URL = appSupportDir.appendingPathComponent("dictionary.txt")
 
-    // MARK: - Preferences (UserDefaults)
-
-    static var model: String {
-        get { defaults.string(forKey: "model")! }
-        set { defaults.set(newValue, forKey: "model") }
-    }
+    // MARK: - Preferences
 
     static var shortcut: String {
         get { defaults.string(forKey: "shortcut")! }
         set { defaults.set(newValue, forKey: "shortcut") }
     }
 
-    static var modelUnloadDelay: TimeInterval {
-        get { defaults.double(forKey: "modelUnloadDelay") }
-        set { defaults.set(newValue, forKey: "modelUnloadDelay") }
-    }
-
     /// Parse shortcut string like "option+space" into modifiers and key code.
-    /// Returns nil if the shortcut string is invalid.
     static var parsedShortcut: (modifiers: NSEvent.ModifierFlags, keyCode: UInt16)? {
         let parts = shortcut.lowercased().split(separator: "+").map(String.init)
         guard parts.count >= 2 else { return nil }
-
         var modifiers: NSEvent.ModifierFlags = []
         for part in parts.dropLast() {
             switch part {
@@ -56,17 +41,12 @@ enum AppConfig {
             default: return nil
             }
         }
-
         guard let keyCode = keyCodeMap[parts.last!] else { return nil }
         return (modifiers, keyCode)
     }
 
-    /// macOS virtual key codes for shortcut parsing
     private static let keyCodeMap: [String: UInt16] = [
-        "space": 49,
-        "return": 36, "enter": 36,
-        "tab": 48,
-        "escape": 53, "esc": 53,
+        "space": 49, "return": 36, "enter": 36, "tab": 48, "escape": 53, "esc": 53,
         "a": 0, "b": 11, "c": 8, "d": 2, "e": 14, "f": 3, "g": 5,
         "h": 4, "i": 34, "j": 38, "k": 40, "l": 37, "m": 46, "n": 45,
         "o": 31, "p": 35, "q": 12, "r": 15, "s": 1, "t": 17, "u": 32,
@@ -77,9 +57,20 @@ enum AppConfig {
         "f7": 98, "f8": 100, "f9": 101, "f10": 109, "f11": 103, "f12": 111,
     ]
 
-    // MARK: - Dictionary (text file)
+    // MARK: - Dictionary
 
-    /// Opens the user's custom dictionary file in their default text editor, creating it if needed
+    /// Read the dictionary file and return non-empty, non-comment lines, trimmed.
+    /// Returns `[]` if the file is missing or unreadable.
+    static func loadDictionary(from url: URL = dictionaryURL) -> [String] {
+        guard let data = try? Data(contentsOf: url),
+              let text = String(data: data, encoding: .utf8) else { return [] }
+        return text
+            .split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty && !$0.hasPrefix("#") }
+    }
+
+    /// Opens the dictionary file, creating it if needed.
     static func openDictionary() {
         ensureAppSupportDir()
         if !FileManager.default.fileExists(atPath: dictionaryURL.path) {
