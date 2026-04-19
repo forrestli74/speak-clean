@@ -132,7 +132,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func startRecording() {
-        guard case .ready = controller.state else { return }
+        guard case .ready = controller.state, inFlight == nil else { return }
         Task { @MainActor in
             do {
                 try await controller.transcriber.start()
