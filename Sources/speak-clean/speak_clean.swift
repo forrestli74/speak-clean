@@ -79,6 +79,7 @@ enum MenuBarIcon {
 class AppDelegate: NSObject, NSApplicationDelegate {
     private var audioRecorder: AVAudioRecorder?
     private var statusItem: NSStatusItem?
+    private var isTranscribing = false
     let controller: AppController
     let saveAudioDir: String?
 
@@ -98,11 +99,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         setupGlobalShortcut()
 
         controller.onStateChange = { [weak self] state in
+            guard let self, self.audioRecorder == nil, !self.isTranscribing else { return }
             switch state {
-            case .notReady: self?.setIcon(MenuBarIcon.processing())
-            case .ready: self?.setIcon(MenuBarIcon.idle())
-            case .busy: break
-            case .error: self?.setIcon(MenuBarIcon.idle())
+            case .notReady: self.setIcon(MenuBarIcon.processing())
+            case .ready: self.setIcon(MenuBarIcon.idle())
+            case .error: self.setIcon(MenuBarIcon.idle())
             }
         }
 
@@ -123,10 +124,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func cleanModelCache() {
-        do {
-            try controller.clearCache()
-        } catch {
-            print("Failed to clean model cache: \(error)")
+        Task {
+            do {
+                try await controller.clearCache()
+            } catch {
+                print("Failed to clean model cache: \(error)")
+            }
         }
     }
 
@@ -161,7 +164,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func startRecording() {
-        guard controller.markBusy() else { return }
+        guard case .ready = controller.state else { return }
+        controller.whisper.prewarm()
 
         let outputDir = saveAudioDir ?? NSTemporaryDirectory()
         try? FileManager.default.createDirectory(atPath: outputDir, withIntermediateDirectories: true)
@@ -187,7 +191,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             NSSound(named: .init("Tink"))?.play()
         } catch {
             print("Failed to start recording: \(error)")
-            controller.markDone()
         }
     }
 
@@ -199,36 +202,34 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         print("Recording saved: \(url.path)")
         NSSound(named: .init("Pop"))?.play()
         setIcon(MenuBarIcon.processing())
+        isTranscribing = true
 
         let controller = self.controller
         let deleteAfter = saveAudioDir == nil
         Task { @MainActor [weak self] in
-            let result: String?
-            do {
-                try await controller.whisper.waitUntilReady()
-                guard let whisper = controller.whisper.instance else {
-                    throw TranscriberError.modelNotLoaded
+            defer {
+                if deleteAfter { try? FileManager.default.removeItem(at: url) }
+                self?.isTranscribing = false
+                if case .ready = controller.state {
+                    self?.setIcon(MenuBarIcon.idle())
                 }
-                // Whisper is non-Sendable but handles its own thread safety;
-                // nonisolated(unsafe) lets us pass it to the nonisolated transcribe call.
-                nonisolated(unsafe) let unsafeWhisper = whisper
-                let text = try await controller.transcriber.transcribe(
-                    whisper: unsafeWhisper, audioFileURL: url
-                )
-                result = text.isEmpty ? nil : text
+            }
+            do {
+                let text = try await controller.whisper.withModel { whisper in
+                    // Whisper is non-Sendable but thread-safe internally.
+                    nonisolated(unsafe) let unsafeWhisper = whisper
+                    return try await controller.transcriber.transcribe(
+                        whisper: unsafeWhisper, audioFileURL: url
+                    )
+                }
+                if !text.isEmpty {
+                    print("Transcription: \(text)")
+                    self?.pasteText(text)
+                }
             } catch {
                 print("Transcription failed: \(error)")
                 controller.markError(error)
-                result = nil
             }
-            if deleteAfter {
-                try? FileManager.default.removeItem(at: url)
-            }
-            if let text = result {
-                print("Transcription: \(text)")
-                self?.pasteText(text)
-            }
-            controller.markDone()
         }
     }
 

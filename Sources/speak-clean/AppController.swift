@@ -7,99 +7,81 @@ final class AppController {
     enum State {
         case notReady
         case ready
-        case busy
         case error(Error)
     }
 
     private(set) var state: State = .notReady
-    let whisper = ManagedModel<Whisper>(name: "whisper")
+    private(set) var pinnedModelName: String?
 
     private var downloadTask: Task<Void, Error>?
-    private var loadedModelName: String?
-
     private let modelManager: ModelManager
     let transcriber = Transcriber()
     var onStateChange: ((State) -> Void)?
+    private(set) var whisper: ManagedModel<Whisper>!
 
     init(modelManager: ModelManager) {
         self.modelManager = modelManager
+        self.whisper = ManagedModel(
+            name: "whisper",
+            idleDelay: { AppConfig.modelUnloadDelay },
+            loader: { [unowned self] in
+                let name = self.pinnedModelName ?? AppConfig.model
+                let url = try await self.modelManager.modelURL(for: name)
+                var params = WhisperParams(strategy: .greedy)
+                params.language = .english
+                params.n_threads = max(1, Int32(ProcessInfo.processInfo.activeProcessorCount / 2))
+                params.print_progress = false
+                params.print_timestamps = false
+                return Whisper(fromFileURL: url, withParams: params)
+            }
+        )
     }
 
     // MARK: - Actions
 
-    /// Reload config, download model files. Not allowed in busy.
+    /// Reload config, download model files. Unloads any in-memory model
+    /// when scopes drain, so the next `withModel` loads the current name.
     func reset() {
+        downloadTask?.cancel()
+        downloadTask = nil
+
+        let newModelName = AppConfig.model
+        let shouldUnload = pinnedModelName != nil
+        pinnedModelName = newModelName
+
         switch state {
-        case .busy: return
-        case .notReady:
-            downloadTask?.cancel()
-            downloadTask = nil
-            whisper.unload()
-        case .ready:
-            whisper.unload()
-            transition(to: .notReady)
-        case .error:
-            whisper.unload()
-            transition(to: .notReady)
+        case .notReady: break
+        case .ready, .error: transition(to: .notReady)
         }
 
-        let modelName = AppConfig.model
-        loadedModelName = modelName
         downloadTask = Task { [self] in
-            _ = try await modelManager.modelURL(for: modelName)
+            if shouldUnload {
+                await whisper.unloadWhenIdle()
+            }
+            _ = try await modelManager.modelURL(for: newModelName)
             self.transition(to: .ready)
-            print("Model files ready: ggml-\(modelName).bin")
+            print("Model files ready: ggml-\(newModelName).bin")
         }
     }
 
-    /// Wait for download task to complete. For testing.
+    /// Wait for the current download to complete. For testing.
     func waitForDownload() async throws {
         try await downloadTask?.value
     }
 
-    /// Delete model files on disk. Not allowed in busy.
-    func clearCache() throws {
-        switch state {
-        case .busy: return
-        default: break
-        }
+    /// Delete model files on disk. Waits for any in-flight scope to finish.
+    func clearCache() async throws {
         downloadTask?.cancel()
         downloadTask = nil
-        whisper.unload()
-        loadedModelName = nil
+        await whisper.unloadWhenIdle()
+        pinnedModelName = nil
         try modelManager.cleanCache()
         transition(to: .notReady)
     }
 
-    /// Enter busy state. Load models to memory. Only from ready.
-    func markBusy() -> Bool {
-        guard case .ready = state else { return false }
-        whisper.cancelUnload()
-
-        let modelName = loadedModelName ?? AppConfig.model
-        whisper.load { [self] in
-            let url = try await modelManager.modelURL(for: modelName)
-            var params = WhisperParams(strategy: .greedy)
-            params.language = .english
-            params.n_threads = max(1, Int32(ProcessInfo.processInfo.activeProcessorCount / 2))
-            params.print_progress = false
-            params.print_timestamps = false
-            return Whisper(fromFileURL: url, withParams: params)
-        }
-
-        transition(to: .busy)
-        return true
-    }
-
-    /// Return to ready after transcription. Starts per-model unload timers.
-    func markDone() {
-        let delay = AppConfig.modelUnloadDelay
-        whisper.scheduleUnload(delay: delay)
-        transition(to: .ready)
-    }
-
+    /// Record a fatal error. Does not force-unload — any in-flight scope
+    /// completes normally; the idle timer will unload afterward.
     func markError(_ error: Error) {
-        whisper.unload()
         transition(to: .error(error))
     }
 
