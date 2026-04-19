@@ -128,6 +128,34 @@ struct TextCleanerIntegrationTests {
         #expect(lower.contains("bake"))
     }
 
+    @Test func revisingAStepViaActuallyReplacesIt() async throws {
+        if skipIfUnavailable() { return }
+        let result = try await TextCleaner.clean(
+            "step 1 mix the flour step 2 add eggs actually step 1 is preheat the oven",
+            dictionary: []
+        )
+        let lower = result.lowercased()
+        // Corrected step 1 content is present.
+        #expect(lower.contains("preheat"))
+        #expect(lower.contains("oven"))
+        // Abandoned step 1 content ("mix the flour") is gone.
+        #expect(!lower.contains("mix"))
+        // Step 2 content is preserved.
+        #expect(lower.contains("eggs"))
+        // Numbered list format.
+        let numberedLines = result
+            .split(whereSeparator: \.isNewline)
+            .filter { line in
+                let t = line.trimmingCharacters(in: .whitespaces)
+                return t.hasPrefix("1.") || t.hasPrefix("2.")
+            }
+        #expect(numberedLines.count == 2)
+        // Markers and correction phrase stripped.
+        #expect(!lower.contains("step 1"))
+        #expect(!lower.contains("step 2"))
+        #expect(!lower.contains("actually"))
+    }
+
     @Test func firstSecondProducesNumberedList() async throws {
         if skipIfUnavailable() { return }
         let result = try await TextCleaner.clean(

@@ -92,6 +92,10 @@ public enum TextCleaner {
             2. add eggs
             3. bake
 
+            <transcript>step 1 mix the flour step 2 add eggs actually step 1 is preheat the oven</transcript>
+            → 1. preheat the oven
+            2. add eggs
+
             <transcript>here are my thoughts first I agree with the plan second I have concerns</transcript>
             → here are my thoughts:
             1. I agree with the plan
