@@ -1,4 +1,5 @@
 import AVFoundation
+import CoreMedia
 import Speech
 
 @MainActor
@@ -36,7 +37,13 @@ public final class Transcriber {
             throw Error.unsupportedLocale(Locale.current)
         }
 
-        let transcriber = DictationTranscriber(locale: locale, preset: .transcription)
+        let transcriber = DictationTranscriber(
+            locale: locale,
+            contentHints: [],
+            transcriptionOptions: [],
+            reportingOptions: [],
+            attributeOptions: []
+        )
         let analyzer = SpeechAnalyzer(modules: [transcriber])
 
         guard let targetFormat = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [transcriber]) else {
@@ -89,7 +96,7 @@ public final class Transcriber {
             }
         }
 
-        let analyzerTask: Task<AVAudioTime?, Swift.Error> = Task {
+        let analyzerTask: Task<CMTime?, Swift.Error> = Task {
             try await analyzer.analyzeSequence(inputSequence)
         }
 
@@ -117,7 +124,7 @@ public final class Transcriber {
         if let t = lastSampleTime {
             try await s.analyzer.finalizeAndFinish(through: t)
         } else {
-            try s.analyzer.cancelAndFinishNow()
+            await s.analyzer.cancelAndFinishNow()
         }
 
         await s.resultsTask.value
@@ -132,7 +139,7 @@ public final class Transcriber {
         s.engine.inputNode.removeTap(onBus: 0)
         s.engine.stop()
         s.inputBuilder.finish()
-        try? s.analyzer.cancelAndFinishNow()
+        await s.analyzer.cancelAndFinishNow()
         s.analyzerTask.cancel()
         s.resultsTask.cancel()
     }
@@ -149,7 +156,7 @@ public final class Transcriber {
         let engine: AVAudioEngine
         let inputBuilder: AsyncStream<AnalyzerInput>.Continuation
         let resultsTask: Task<Void, Never>
-        let analyzerTask: Task<AVAudioTime?, Swift.Error>
+        let analyzerTask: Task<CMTime?, Swift.Error>
         let buffer: TextBuffer
     }
 }
