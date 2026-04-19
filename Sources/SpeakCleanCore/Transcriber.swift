@@ -26,7 +26,7 @@ public final class Transcriber {
             locale: locale,
             contentHints: [],
             transcriptionOptions: [],
-            reportingOptions: [],
+            reportingOptions: [.volatileResults],
             attributeOptions: []
         )
         let analyzer = SpeechAnalyzer(modules: [transcriber])
@@ -63,14 +63,21 @@ public final class Transcriber {
 
         let buffer = TextBuffer()
         let resultsTask = Task { @MainActor in
-            for try await result in transcriber.results where result.isFinal {
-                buffer.text += String(result.text.characters)
+            for try await result in transcriber.results {
+                let text = String(result.text.characters)
+                print("[stt result] isFinal=\(result.isFinal) text=\(text.isEmpty ? "(empty)" : text)")
+                if result.isFinal {
+                    buffer.text += text
+                }
             }
+            print("[stt results stream ended]")
         }
 
         let analyzerTask: Task<CMTime?, Swift.Error> = Task {
             try await analyzer.analyzeSequence(inputSequence)
         }
+
+        print("[tap] hwFormat=\(hwFormat) targetFormat=\(targetFormat)")
 
         session = Session(
             analyzer: analyzer,
@@ -78,7 +85,8 @@ public final class Transcriber {
             inputBuilder: inputBuilder,
             resultsTask: resultsTask,
             analyzerTask: analyzerTask,
-            buffer: buffer
+            buffer: buffer,
+            bridge: bridge
         )
     }
 
@@ -91,14 +99,16 @@ public final class Transcriber {
         s.engine.stop()
         s.inputBuilder.finish()
 
-        if let t = try await s.analyzerTask.value {
-            try await s.analyzer.finalizeAndFinish(through: t)
-        } else {
-            await s.analyzer.cancelAndFinishNow()
-        }
+        print("[stop] yielded \(s.bridge.yieldCount) buffers, \(s.bridge.failedConversions) failed conversions")
+
+        let lastSampleTime = try await s.analyzerTask.value
+        print("[stop] analyzerTask lastSampleTime = \(String(describing: lastSampleTime))")
+        try await s.analyzer.finalizeAndFinishThroughEndOfInput()
 
         try? await s.resultsTask.value
-        return s.buffer.text.trimmingCharacters(in: .whitespaces)
+        let text = s.buffer.text.trimmingCharacters(in: .whitespaces)
+        print("[stop] accumulated text: \(text.isEmpty ? "(empty)" : text)")
+        return text
     }
 
     /// Abort without returning text.
@@ -125,6 +135,8 @@ public final class Transcriber {
         let converter: AVAudioConverter?
         let targetFormat: AVAudioFormat
         let hwFormat: AVAudioFormat
+        var yieldCount = 0
+        var failedConversions = 0
 
         init(builder: AsyncStream<AnalyzerInput>.Continuation,
              converter: AVAudioConverter?,
@@ -139,11 +151,15 @@ public final class Transcriber {
         func handle(buffer: AVAudioPCMBuffer) {
             guard let converter else {
                 builder.yield(AnalyzerInput(buffer: buffer))
+                yieldCount += 1
                 return
             }
             let ratio = targetFormat.sampleRate / hwFormat.sampleRate
             let outCapacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio) + 1024
-            guard let out = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: outCapacity) else { return }
+            guard let out = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: outCapacity) else {
+                failedConversions += 1
+                return
+            }
             var consumed = false
             var err: NSError?
             converter.convert(to: out, error: &err) { _, status in
@@ -154,6 +170,9 @@ public final class Transcriber {
             }
             if err == nil {
                 builder.yield(AnalyzerInput(buffer: out))
+                yieldCount += 1
+            } else {
+                failedConversions += 1
             }
         }
     }
@@ -165,5 +184,6 @@ public final class Transcriber {
         let resultsTask: Task<Void, Swift.Error>
         let analyzerTask: Task<CMTime?, Swift.Error>
         let buffer: TextBuffer
+        let bridge: TapBridge
     }
 }
