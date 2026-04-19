@@ -56,25 +56,18 @@ public final class Transcriber {
         let hwFormat = engine.inputNode.outputFormat(forBus: 0)
         let converter = AVAudioConverter(from: hwFormat, to: targetFormat)
 
-        engine.inputNode.installTap(onBus: 0, bufferSize: 4096, format: hwFormat) { [inputBuilder] buffer, _ in
-            guard let converter else {
-                inputBuilder.yield(AnalyzerInput(buffer: buffer))
-                return
-            }
-            let ratio = targetFormat.sampleRate / hwFormat.sampleRate
-            let outCapacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio) + 1024
-            guard let out = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: outCapacity) else { return }
-            var consumed = false
-            var err: NSError?
-            converter.convert(to: out, error: &err) { _, status in
-                if consumed { status.pointee = .endOfStream; return nil }
-                consumed = true
-                status.pointee = .haveData
-                return buffer
-            }
-            if err == nil {
-                inputBuilder.yield(AnalyzerInput(buffer: out))
-            }
+        // AVFoundation invokes the tap from a realtime audio thread. Wrap the
+        // per-call state in a @unchecked Sendable bridge and mark the closure
+        // @Sendable so Swift 6 doesn't treat it as main-actor-isolated (which
+        // would cause a runtime executor-check crash).
+        let bridge = TapBridge(
+            builder: inputBuilder,
+            converter: converter,
+            targetFormat: targetFormat,
+            hwFormat: hwFormat
+        )
+        engine.inputNode.installTap(onBus: 0, bufferSize: 4096, format: hwFormat) { @Sendable buffer, _ in
+            bridge.handle(buffer: buffer)
         }
 
         do {
@@ -148,6 +141,48 @@ public final class Transcriber {
 
     private final class TextBuffer {
         var text: String = ""
+    }
+
+    /// Holds per-session tap state so the realtime audio callback can run
+    /// without actor isolation. Synchronization: each tap invocation is
+    /// serialized by AVFoundation's own audio thread, and `builder.yield`
+    /// is documented thread-safe.
+    private final class TapBridge: @unchecked Sendable {
+        let builder: AsyncStream<AnalyzerInput>.Continuation
+        let converter: AVAudioConverter?
+        let targetFormat: AVAudioFormat
+        let hwFormat: AVAudioFormat
+
+        init(builder: AsyncStream<AnalyzerInput>.Continuation,
+             converter: AVAudioConverter?,
+             targetFormat: AVAudioFormat,
+             hwFormat: AVAudioFormat) {
+            self.builder = builder
+            self.converter = converter
+            self.targetFormat = targetFormat
+            self.hwFormat = hwFormat
+        }
+
+        func handle(buffer: AVAudioPCMBuffer) {
+            guard let converter else {
+                builder.yield(AnalyzerInput(buffer: buffer))
+                return
+            }
+            let ratio = targetFormat.sampleRate / hwFormat.sampleRate
+            let outCapacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio) + 1024
+            guard let out = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: outCapacity) else { return }
+            var consumed = false
+            var err: NSError?
+            converter.convert(to: out, error: &err) { _, status in
+                if consumed { status.pointee = .endOfStream; return nil }
+                consumed = true
+                status.pointee = .haveData
+                return buffer
+            }
+            if err == nil {
+                builder.yield(AnalyzerInput(buffer: out))
+            }
+        }
     }
 
     private struct Session {
