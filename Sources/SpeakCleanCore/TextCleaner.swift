@@ -1,8 +1,19 @@
 import FoundationModels
 
+/// Filler-word and self-correction cleanup over a raw STT transcript,
+/// implemented as a thin wrapper around Apple's on-device
+/// `LanguageModelSession`. Caseless enum — no state, no instances; the
+/// session is created fresh per `clean(_:dictionary:)` call so no
+/// conversation history leaks between utterances.
 public enum TextCleaner {
 
-    /// Clean a raw transcript via the on-device LLM.
+    /// Run the transcript through the LLM and return the cleaned text.
+    /// The `dictionary` words are baked into the system instructions as
+    /// "preserve these spellings exactly" so user-defined proper nouns
+    /// survive the cleanup pass. Throws whatever `LanguageModelSession`
+    /// throws; callers are expected to surface failures via
+    /// `AppController.setState(.notReady(...))`. Returns `""` for
+    /// whitespace-only input; otherwise returns trimmed LLM output.
     public static func clean(_ raw: String, dictionary: [String]) async throws -> String {
         let trimmed = raw.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return "" }
@@ -12,7 +23,9 @@ public enum TextCleaner {
         return response.content.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    /// Build the system-instruction string. Public for testing.
+    /// Build the system-instruction string that tells the LLM what to
+    /// remove and what to preserve. Pure function; exposed publicly so
+    /// unit tests can assert on its output without calling the LLM.
     public static func instructions(dictionary: [String]) -> String {
         let preserveBlock = dictionary.isEmpty
             ? ""

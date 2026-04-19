@@ -3,8 +3,23 @@ import AVFoundation
 import Speech
 import FoundationModels
 
-/// Runs availability checks in order: Apple Intelligence → mic permission →
-/// locale → STT assets. Any failure short-circuits with a user-facing reason.
+/// Production availability checker for `AppController`.
+///
+/// Runs four checks in fixed order; the first one that fails short-
+/// circuits with a user-facing `reason`:
+///
+/// 1. `SystemLanguageModel.default.availability` — Apple Intelligence
+///    capability, enablement, and model-ready status.
+/// 2. `AVCaptureDevice.requestAccess(for: .audio)` — microphone
+///    permission (prompts the user on first run).
+/// 3. `DictationTranscriber.supportedLocale(equivalentTo:)` — whether
+///    the user's system locale has dictation assets available.
+/// 4. `AssetInventory.assetInstallationRequest(supporting:)` — if the
+///    STT assets aren't installed, download them (this can block for
+///    the first run of the app on a fresh OS install).
+///
+/// Returns `.ready` only if all four succeed. Called on launch and from
+/// the "Reset" menu action.
 func runAvailabilityChecks() async -> AppController.State {
     // 1. Apple Intelligence (Foundation Models)
     switch SystemLanguageModel.default.availability {

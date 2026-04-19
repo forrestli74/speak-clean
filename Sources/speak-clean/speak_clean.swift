@@ -3,7 +3,12 @@ import SpeakCleanCore
 
 // MARK: - Menu bar icons
 
+/// Programmatically drawn menu-bar icons (one for each `AppController`
+/// state we surface visually). They're `NSImage.isTemplate = true` so
+/// macOS recolors them for light/dark menu bars automatically.
 enum MenuBarIcon {
+    /// Idle state: I-beam text cursor plus a small waveform. Shown when
+    /// `AppController.state == .ready` and nothing is recording.
     static func idle(height: CGFloat = 18) -> NSImage {
         let width = height
         let scale = height / 36.0
@@ -31,6 +36,8 @@ enum MenuBarIcon {
         return img
     }
 
+    /// Recording indicator: a filled circle. Shown while the mic is
+    /// live (between `startRecording` and `stopRecording`).
     static func recording(height: CGFloat = 18) -> NSImage {
         let img = NSImage(size: NSSize(width: height, height: height), flipped: true) { rect in
             NSColor.black.setFill()
@@ -42,6 +49,9 @@ enum MenuBarIcon {
         return img
     }
 
+    /// Processing / not-ready: three dots. Shown on startup, during
+    /// post-recording transcription + cleanup, and whenever
+    /// `AppController.state == .notReady`. Tooltip disambiguates.
     static func processing(height: CGFloat = 18) -> NSImage {
         let img = NSImage(size: NSSize(width: height, height: height), flipped: true) { _ in
             NSColor.black.setFill()
@@ -59,19 +69,42 @@ enum MenuBarIcon {
     }
 }
 
+/// The app's `NSApplicationDelegate`. Owns the menu-bar status item,
+/// global hotkey monitors, and the start/stop/paste flow that ties
+/// `AppController` together with its `Transcriber` and `TextCleaner`.
+/// Intentionally thin: all multi-step state lives in `AppController`.
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    /// The menu-bar item itself. Created in
+    /// `applicationDidFinishLaunching`; displays icon + tooltip + menu.
     private var statusItem: NSStatusItem?
+
+    /// `true` between `startRecording()` and `stopRecording()`. Gates
+    /// re-entry of the hotkey handler and suppresses `onStateChange`
+    /// icon updates while the recording icon is showing.
     private var isRecording = false
+
+    /// The pending post-recording Task (stop → clean → paste). Gates
+    /// `startRecording` so a second hotkey press can't race a still-
+    /// running stop task whose `Transcriber.session` hasn't been
+    /// cleared yet; if we skipped this, `transcriber.start()` would
+    /// throw `alreadyRecording`.
     private var inFlight: Task<Void, Never>?
+
+    /// The shared state owner. Set at launch.
     let controller: AppController
 
     init(controller: AppController) {
         self.controller = controller
     }
 
+    /// Assign a template image to the status-bar button.
     private func setIcon(_ icon: NSImage) { statusItem?.button?.image = icon }
 
+    /// App-startup entry point. Builds the status item + menu, hooks
+    /// `controller.onStateChange` up to the icon/tooltip, registers the
+    /// global hotkey, and kicks off the first availability check via
+    /// `controller.reset()`.
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem?.menu = buildMenu()
@@ -93,6 +126,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task { await controller.reset() }
     }
 
+    /// Construct the three-item status-bar menu: Edit Dictionary… /
+    /// Reset / Quit.
     private func buildMenu() -> NSMenu {
         let menu = NSMenu()
         menu.addItem(NSMenuItem(title: "Edit Dictionary…", action: #selector(editDictionary), keyEquivalent: ""))
@@ -102,12 +137,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return menu
     }
 
+    /// Opens `dictionary.txt` in the user's default editor.
     @objc private func editDictionary() { AppConfig.openDictionary() }
 
+    /// Manual-recovery action: re-runs availability checks via
+    /// `AppController.reset()`. The single user-facing recovery path.
     @objc private func resetController() {
         Task { await controller.reset() }
     }
 
+    /// Install both a global and a local `NSEvent` monitor for the
+    /// configured shortcut. The global monitor catches presses when
+    /// other apps are frontmost; the local one catches presses when
+    /// this app's menu is open (rare, but important for `.accessory`
+    /// apps). Both invoke `toggleRecording()`.
     private func setupGlobalShortcut() {
         guard let s = AppConfig.parsedShortcut else {
             print("Invalid shortcut: \(AppConfig.shortcut)")
@@ -127,10 +170,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// Hotkey dispatch. Single shortcut toggles: press starts, press
+    /// again stops.
     private func toggleRecording() {
         if isRecording { stopRecording() } else { startRecording() }
     }
 
+    /// Begin recording if the controller is `.ready` and there's no
+    /// outstanding stop task. On error, flips the app to `.notReady`
+    /// (user must hit Reset).
     private func startRecording() {
         guard case .ready = controller.state, inFlight == nil else { return }
         Task { @MainActor in
@@ -145,6 +193,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// End recording, run the LLM cleanup pass, and paste the result.
+    /// All the async work lives in the stored `inFlight` Task so a
+    /// subsequent hotkey press can see "still processing" and no-op.
     private func stopRecording() {
         guard isRecording else { return }
         isRecording = false
@@ -167,6 +218,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// Inject `text` into the currently focused app by writing to the
+    /// general pasteboard, synthesizing a Cmd+V keystroke, then
+    /// restoring the previous clipboard contents ~100 ms later.
     private func pasteText(_ text: String) {
         let pb = NSPasteboard.general
         let previous = pb.string(forType: .string)
@@ -190,8 +244,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
+/// Executable entry point. Wires the shared `AppController` + its
+/// production `runAvailabilityChecks` to the `AppDelegate` and starts
+/// the AppKit run loop in `.accessory` activation policy (menu-bar only
+/// — no window, no dock icon).
 @main
 enum Main {
+    /// Constructs the app and starts the main run loop. Never returns.
     static func main() {
         let app = NSApplication.shared
         app.setActivationPolicy(.accessory)
