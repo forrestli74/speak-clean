@@ -1,50 +1,30 @@
 import Testing
 @testable import speak_clean
 
-private final class FakeChecker: AvailabilityChecker, @unchecked Sendable {
-    var nextResult: AppController.State
-    var callCount = 0
-    init(_ initial: AppController.State) { self.nextResult = initial }
-    func check() async -> AppController.State {
-        callCount += 1
-        return nextResult
-    }
-}
-
 @Suite("AppController")
 struct AppControllerTests {
 
     @Test @MainActor func startsInNotReady() {
-        let controller = AppController(checker: FakeChecker(.ready))
+        let controller = AppController(check: { .ready })
         if case .notReady = controller.state { } else {
             Issue.record("Expected .notReady at init, got \(controller.state)")
         }
     }
 
     @Test @MainActor func resetTransitionsToReadyWhenAvailable() async {
-        let checker = FakeChecker(.ready)
-        let controller = AppController(checker: checker)
+        let controller = AppController(check: { .ready })
         await controller.reset()
-        if case .ready = controller.state { } else {
-            Issue.record("Expected .ready, got \(controller.state)")
-        }
-        #expect(checker.callCount == 1)
+        #expect(controller.state == .ready)
     }
 
     @Test @MainActor func resetTransitionsToNotReadyWhenChecksFail() async {
-        let checker = FakeChecker(.notReady(reason: "No AI"))
-        let controller = AppController(checker: checker)
+        let controller = AppController(check: { .notReady(reason: "No AI") })
         await controller.reset()
-        if case .notReady(let reason) = controller.state {
-            #expect(reason == "No AI")
-        } else {
-            Issue.record("Expected .notReady, got \(controller.state)")
-        }
+        #expect(controller.state == .notReady(reason: "No AI"))
     }
 
     @Test @MainActor func onStateChangeFiresForEachTransition() async {
-        let checker = FakeChecker(.ready)
-        let controller = AppController(checker: checker)
+        let controller = AppController(check: { .ready })
         var log: [String] = []
         controller.onStateChange = { state in
             switch state {
@@ -57,10 +37,16 @@ struct AppControllerTests {
     }
 
     @Test @MainActor func secondResetRerunsChecks() async {
-        let checker = FakeChecker(.ready)
-        let controller = AppController(checker: checker)
+        final class Counter: @unchecked Sendable {
+            var count = 0
+        }
+        let counter = Counter()
+        let controller = AppController(check: {
+            counter.count += 1
+            return .ready
+        })
         await controller.reset()
         await controller.reset()
-        #expect(checker.callCount == 2)
+        #expect(counter.count == 2)
     }
 }

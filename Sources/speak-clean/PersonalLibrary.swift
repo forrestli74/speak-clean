@@ -70,9 +70,9 @@ enum AppConfig {
             .filter { !$0.isEmpty && !$0.hasPrefix("#") }
     }
 
-    /// Opens the dictionary file, creating it if needed.
+    /// Opens the dictionary file, creating it (and its parent directory) if needed.
     static func openDictionary() {
-        ensureAppSupportDir()
+        try? FileManager.default.createDirectory(at: appSupportDir, withIntermediateDirectories: true)
         if !FileManager.default.fileExists(atPath: dictionaryURL.path) {
             FileManager.default.createFile(
                 atPath: dictionaryURL.path,
@@ -80,11 +80,5 @@ enum AppConfig {
             )
         }
         NSWorkspace.shared.open(dictionaryURL)
-    }
-
-    private static func ensureAppSupportDir() {
-        if !FileManager.default.fileExists(atPath: appSupportDir.path) {
-            try? FileManager.default.createDirectory(at: appSupportDir, withIntermediateDirectories: true)
-        }
     }
 }

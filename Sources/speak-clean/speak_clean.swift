@@ -158,7 +158,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             do {
                 let raw = try await controller.transcriber.stop()
                 let dictionary = AppConfig.loadDictionary()
-                let cleaned = try await controller.cleaner.clean(raw, dictionary: dictionary)
+                let cleaned = try await TextCleaner.clean(raw, dictionary: dictionary)
                 if !cleaned.isEmpty {
                     self?.pasteText(cleaned)
                 }
@@ -198,7 +198,7 @@ enum Main {
     static func main() {
         let app = NSApplication.shared
         app.setActivationPolicy(.accessory)
-        let controller = AppController(checker: DefaultAvailabilityChecker())
+        let controller = AppController(check: runAvailabilityChecks)
         let delegate = AppDelegate(controller: controller)
         app.delegate = delegate
         app.run()

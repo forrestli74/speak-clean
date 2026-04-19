@@ -5,36 +5,21 @@ import Speech
 @MainActor
 public final class Transcriber {
 
-    public enum Error: Swift.Error, LocalizedError {
-        case unsupportedLocale(Locale)
-        case alreadyRecording
-        case notRecording
-        case engineStartFailed(Swift.Error)
-        case formatUnavailable
-
-        public var errorDescription: String? {
-            switch self {
-            case .unsupportedLocale(let l): return "Unsupported locale: \(l.identifier)"
-            case .alreadyRecording: return "Recording already in progress"
-            case .notRecording: return "No recording in progress"
-            case .engineStartFailed(let e): return "Audio engine failed: \(e.localizedDescription)"
-            case .formatUnavailable: return "Could not determine audio format"
-            }
-        }
+    public struct Error: LocalizedError {
+        public let reason: String
+        public var errorDescription: String? { reason }
     }
 
     private var session: Session?
 
     public init() {}
 
-    /// Begin streaming recognition. Captures microphone audio via
-    /// `AVAudioEngine`, feeds it to a `SpeechAnalyzer` session, and
-    /// accumulates final results. Call `stop()` to finalize and retrieve text.
+    /// Begin streaming recognition. Call `stop()` to finalize and retrieve text.
     public func start() async throws {
-        guard session == nil else { throw Error.alreadyRecording }
+        guard session == nil else { throw Error(reason: "Recording already in progress") }
 
         guard let locale = await DictationTranscriber.supportedLocale(equivalentTo: Locale.current) else {
-            throw Error.unsupportedLocale(Locale.current)
+            throw Error(reason: "Unsupported locale: \(Locale.current.identifier)")
         }
 
         let transcriber = DictationTranscriber(
@@ -47,7 +32,7 @@ public final class Transcriber {
         let analyzer = SpeechAnalyzer(modules: [transcriber])
 
         guard let targetFormat = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [transcriber]) else {
-            throw Error.formatUnavailable
+            throw Error(reason: "Could not determine audio format")
         }
 
         let (inputSequence, inputBuilder) = AsyncStream.makeStream(of: AnalyzerInput.self)
@@ -56,10 +41,8 @@ public final class Transcriber {
         let hwFormat = engine.inputNode.outputFormat(forBus: 0)
         let converter = AVAudioConverter(from: hwFormat, to: targetFormat)
 
-        // AVFoundation invokes the tap from a realtime audio thread. Wrap the
-        // per-call state in a @unchecked Sendable bridge and mark the closure
-        // @Sendable so Swift 6 doesn't treat it as main-actor-isolated (which
-        // would cause a runtime executor-check crash).
+        // @Sendable closure + TapBridge → runs on AVFoundation's audio thread
+        // without a main-actor executor check.
         let bridge = TapBridge(
             builder: inputBuilder,
             converter: converter,
@@ -75,17 +58,13 @@ public final class Transcriber {
         } catch {
             engine.inputNode.removeTap(onBus: 0)
             inputBuilder.finish()
-            throw Error.engineStartFailed(error)
+            throw Error(reason: "Audio engine failed: \(error.localizedDescription)")
         }
 
         let buffer = TextBuffer()
         let resultsTask = Task { @MainActor in
-            do {
-                for try await result in transcriber.results where result.isFinal {
-                    buffer.text += String(result.text.characters)
-                }
-            } catch {
-                // Errors propagate via analyzerTask; swallow here.
+            for try await result in transcriber.results where result.isFinal {
+                buffer.text += String(result.text.characters)
             }
         }
 
@@ -95,7 +74,6 @@ public final class Transcriber {
 
         session = Session(
             analyzer: analyzer,
-            transcriber: transcriber,
             engine: engine,
             inputBuilder: inputBuilder,
             resultsTask: resultsTask,
@@ -104,23 +82,22 @@ public final class Transcriber {
         )
     }
 
-    /// Stop recording, finalize the session, and return the accumulated text.
+    /// Stop recording, finalize, return the accumulated text.
     public func stop() async throws -> String {
-        guard let s = session else { throw Error.notRecording }
+        guard let s = session else { throw Error(reason: "No recording in progress") }
         defer { session = nil }
 
         s.engine.inputNode.removeTap(onBus: 0)
         s.engine.stop()
         s.inputBuilder.finish()
 
-        let lastSampleTime = try await s.analyzerTask.value
-        if let t = lastSampleTime {
+        if let t = try await s.analyzerTask.value {
             try await s.analyzer.finalizeAndFinish(through: t)
         } else {
             await s.analyzer.cancelAndFinishNow()
         }
 
-        await s.resultsTask.value
+        try? await s.resultsTask.value
         return s.buffer.text.trimmingCharacters(in: .whitespaces)
     }
 
@@ -143,10 +120,6 @@ public final class Transcriber {
         var text: String = ""
     }
 
-    /// Holds per-session tap state so the realtime audio callback can run
-    /// without actor isolation. Synchronization: each tap invocation is
-    /// serialized by AVFoundation's own audio thread, and `builder.yield`
-    /// is documented thread-safe.
     private final class TapBridge: @unchecked Sendable {
         let builder: AsyncStream<AnalyzerInput>.Continuation
         let converter: AVAudioConverter?
@@ -187,10 +160,9 @@ public final class Transcriber {
 
     private struct Session {
         let analyzer: SpeechAnalyzer
-        let transcriber: DictationTranscriber
         let engine: AVAudioEngine
         let inputBuilder: AsyncStream<AnalyzerInput>.Continuation
-        let resultsTask: Task<Void, Never>
+        let resultsTask: Task<Void, Swift.Error>
         let analyzerTask: Task<CMTime?, Swift.Error>
         let buffer: TextBuffer
     }
