@@ -52,6 +52,13 @@ public enum TextCleaner {
               mid-sentence, drop the abandoned words and keep the corrected phrase. \
               The word "actually" (and "wait", "no", "I mean") often signals a \
               correction — what follows replaces what came before.
+            - Format as bullets on request: if the transcript explicitly asks for \
+              a list — phrases like "as bullets", "as bullet points", "as a list", \
+              "in bullet points", "list the following" — output each item on its \
+              own line prefixed with "- " (hyphen + space). Strip the list-trigger \
+              phrase itself. Do NOT auto-format sequences that merely sound \
+              list-like (e.g. "first… second… third…") unless such a trigger is \
+              present; keep those as prose.
 
             Keep everything else exactly as spoken: wording, punctuation, \
               capitalization, grammar, abbreviations, repetition for emphasis.
@@ -73,7 +80,20 @@ public enum TextCleaner {
             → I wanted to ask about the meeting
 
             <transcript>What time is it</transcript>
-            → What time is it\(preserveBlock)
+            → What time is it
+
+            <transcript>as bullet points buy groceries go to the bank pick up the kids</transcript>
+            → - buy groceries
+            - go to the bank
+            - pick up the kids
+
+            <transcript>list the following first milk second bread third eggs</transcript>
+            → - milk
+            - bread
+            - eggs
+
+            <transcript>first I went to work then I had lunch then I came home</transcript>
+            → first I went to work then I had lunch then I came home\(preserveBlock)
             """
     }
 }

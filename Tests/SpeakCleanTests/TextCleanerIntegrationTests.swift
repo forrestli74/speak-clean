@@ -100,4 +100,51 @@ struct TextCleanerIntegrationTests {
         let result = try await TextCleaner.clean("   ", dictionary: [])
         #expect(result == "")
     }
+
+    @Test func explicitBulletRequestProducesBullets() async throws {
+        if skipIfUnavailable() { return }
+        let result = try await TextCleaner.clean(
+            "as bullet points buy groceries go to the bank pick up the kids",
+            dictionary: []
+        )
+        // Three lines, each starting with "- ".
+        let bulletLines = result
+            .split(whereSeparator: \.isNewline)
+            .filter { $0.trimmingCharacters(in: .whitespaces).hasPrefix("- ") }
+        #expect(bulletLines.count >= 3)
+        let lower = result.lowercased()
+        #expect(lower.contains("groceries"))
+        #expect(lower.contains("bank"))
+        #expect(lower.contains("kids"))
+        // The trigger phrase itself should be stripped.
+        #expect(!lower.contains("as bullet points"))
+    }
+
+    @Test func listTriggerPhraseIsStripped() async throws {
+        if skipIfUnavailable() { return }
+        let result = try await TextCleaner.clean(
+            "list the following first milk second bread third eggs",
+            dictionary: []
+        )
+        let lower = result.lowercased()
+        #expect(lower.contains("milk"))
+        #expect(lower.contains("bread"))
+        #expect(lower.contains("eggs"))
+        #expect(!lower.contains("list the following"))
+        // Sequence markers "first/second/third" should be removed too;
+        // they only existed to delimit list items in speech.
+        #expect(!lower.contains("first milk"))
+    }
+
+    @Test func listShapedProseWithoutTriggerStaysProse() async throws {
+        if skipIfUnavailable() { return }
+        let result = try await TextCleaner.clean(
+            "first I went to work then I had lunch then I came home",
+            dictionary: []
+        )
+        // No explicit bullet trigger → should not force-format.
+        #expect(!result.hasPrefix("- "))
+        #expect(!result.contains("\n- "))
+        #expect(result.lowercased().contains("went to work"))
+    }
 }
