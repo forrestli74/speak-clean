@@ -78,6 +78,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         setIcon(MenuBarIcon.processing())
 
         controller.onStateChange = { [weak self] state in
+            print("[state] \(state)")
             guard let self, !self.isRecording else { return }
             switch state {
             case .ready:
@@ -132,39 +133,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func startRecording() {
-        guard case .ready = controller.state, inFlight == nil else { return }
+        guard case .ready = controller.state, inFlight == nil else {
+            print("[hotkey] start ignored (state=\(controller.state), inFlight=\(inFlight != nil))")
+            return
+        }
+        print("[hotkey] start")
         Task { @MainActor in
             do {
                 try await controller.transcriber.start()
                 isRecording = true
                 setIcon(MenuBarIcon.recording())
-                NSSound(named: .init("Tink"))?.play()
+                print("[recording] started")
             } catch {
-                print("Start failed: \(error)")
+                print("[recording] start failed: \(error)")
                 controller.markFailed("Recording start failed: \(error.localizedDescription)")
             }
         }
     }
 
     private func stopRecording() {
-        guard isRecording else { return }
+        guard isRecording else {
+            print("[hotkey] stop ignored (not recording)")
+            return
+        }
+        print("[hotkey] stop")
         isRecording = false
         setIcon(MenuBarIcon.processing())
-        NSSound(named: .init("Pop"))?.play()
 
         let controller = self.controller
         inFlight = Task { @MainActor [weak self] in
             defer { self?.inFlight = nil }
             do {
                 let raw = try await controller.transcriber.stop()
+                print("[transcribed] \(raw.isEmpty ? "(empty)" : raw)")
                 let dictionary = AppConfig.loadDictionary()
                 let cleaned = try await TextCleaner.clean(raw, dictionary: dictionary)
+                print("[cleaned] \(cleaned.isEmpty ? "(empty)" : cleaned)")
                 if !cleaned.isEmpty {
                     self?.pasteText(cleaned)
                 }
                 self?.setIcon(MenuBarIcon.idle())
             } catch {
-                print("Transcription failed: \(error)")
+                print("[transcription failed] \(error)")
                 controller.markFailed("Transcription failed: \(error.localizedDescription)")
             }
         }
