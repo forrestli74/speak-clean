@@ -1,91 +1,46 @@
 import Foundation
-import SwiftWhisper
 import SpeakCleanCore
 
 @MainActor
 final class AppController {
-    enum State {
-        case notReady
+    enum State: Sendable, Equatable {
         case ready
-        case error(Error)
+        case notReady(reason: String)
+
+        static func == (lhs: State, rhs: State) -> Bool {
+            switch (lhs, rhs) {
+            case (.ready, .ready): return true
+            case (.notReady(let a), .notReady(let b)): return a == b
+            default: return false
+            }
+        }
     }
 
-    private(set) var state: State = .notReady
-    private(set) var pinnedModelName: String?
-
-    private var downloadTask: Task<Void, Error>?
-    private let modelManager: ModelManager
-    let transcriber = Transcriber()
+    private(set) var state: State = .notReady(reason: "Initializing…")
     var onStateChange: ((State) -> Void)?
-    private(set) var whisper: ManagedModel<Whisper>!
 
-    init(modelManager: ModelManager) {
-        self.modelManager = modelManager
-        self.whisper = ManagedModel(
-            name: "whisper",
-            idleDelay: { AppConfig.modelUnloadDelay },
-            loader: { [unowned self] in
-                let name = self.pinnedModelName ?? AppConfig.model
-                let url = try await self.modelManager.modelURL(for: name)
-                var params = WhisperParams(strategy: .greedy)
-                params.language = .english
-                params.n_threads = max(1, Int32(ProcessInfo.processInfo.activeProcessorCount / 2))
-                params.print_progress = false
-                params.print_timestamps = false
-                return Whisper(fromFileURL: url, withParams: params)
-            }
-        )
+    private let checker: AvailabilityChecker
+    let transcriber = Transcriber()
+    let cleaner = TextCleaner()
+
+    init(checker: AvailabilityChecker) {
+        self.checker = checker
     }
 
-    // MARK: - Actions
+    /// Cancel any work, re-run availability checks, transition to the result.
+    /// Called on launch and from the "Reset" menu item.
+    func reset() async {
+        await transcriber.cancel()
 
-    /// Reload config, download model files. Unloads any in-memory model
-    /// when scopes drain, so the next `withModel` loads the current name.
-    func reset() {
-        downloadTask?.cancel()
-        downloadTask = nil
-
-        let newModelName = AppConfig.model
-        let shouldUnload = pinnedModelName != nil
-        pinnedModelName = newModelName
-
-        switch state {
-        case .notReady: break
-        case .ready, .error: transition(to: .notReady)
-        }
-
-        downloadTask = Task { [self] in
-            if shouldUnload {
-                await whisper.unloadWhenIdle()
-            }
-            _ = try await modelManager.modelURL(for: newModelName)
-            self.transition(to: .ready)
-            print("Model files ready: ggml-\(newModelName).bin")
-        }
+        transition(to: .notReady(reason: "Checking availability…"))
+        transition(to: await checker.check())
     }
 
-    /// Wait for the current download to complete. For testing.
-    func waitForDownload() async throws {
-        try await downloadTask?.value
+    /// Record a failure (e.g., error thrown during a recording). Forces Reset
+    /// as the recovery path.
+    func markFailed(_ reason: String) {
+        transition(to: .notReady(reason: reason))
     }
-
-    /// Delete model files on disk. Waits for any in-flight scope to finish.
-    func clearCache() async throws {
-        downloadTask?.cancel()
-        downloadTask = nil
-        await whisper.unloadWhenIdle()
-        pinnedModelName = nil
-        try modelManager.cleanCache()
-        transition(to: .notReady)
-    }
-
-    /// Record a fatal error. Does not force-unload — any in-flight scope
-    /// completes normally; the idle timer will unload afterward.
-    func markError(_ error: Error) {
-        transition(to: .error(error))
-    }
-
-    // MARK: - Private
 
     private func transition(to newState: State) {
         state = newState
