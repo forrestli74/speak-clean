@@ -196,6 +196,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// End recording, run the LLM cleanup pass, and paste the result.
     /// All the async work lives in the stored `inFlight` Task so a
     /// subsequent hotkey press can see "still processing" and no-op.
+    /// Logs the raw transcript and per-stage timings to stderr.
     private func stopRecording() {
         guard isRecording else { return }
         isRecording = false
@@ -205,8 +206,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         inFlight = Task { @MainActor [weak self] in
             defer { self?.inFlight = nil }
             do {
+                let t0 = CFAbsoluteTimeGetCurrent()
                 let raw = try await controller.transcriber.stop()
+                let t1 = CFAbsoluteTimeGetCurrent()
+                print("[raw] \(raw.isEmpty ? "(empty)" : raw) — transcribe=\(Self.ms(t1 - t0))ms")
                 let cleaned = try await TextCleaner.clean(raw, dictionary: AppConfig.loadDictionary())
+                let t2 = CFAbsoluteTimeGetCurrent()
+                print("[cleaned] \(cleaned.isEmpty ? "(empty)" : cleaned) — clean=\(Self.ms(t2 - t1))ms total=\(Self.ms(t2 - t0))ms")
                 if !cleaned.isEmpty {
                     self?.pasteText(cleaned)
                 }
@@ -216,6 +222,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 controller.setState(.notReady(reason: "Transcription failed: \(error.localizedDescription)"))
             }
         }
+    }
+
+    /// Seconds → whole-millisecond string, for log formatting.
+    private static func ms(_ seconds: CFAbsoluteTime) -> String {
+        String(Int((seconds * 1000).rounded()))
     }
 
     /// Inject `text` into the currently focused app by writing to the
