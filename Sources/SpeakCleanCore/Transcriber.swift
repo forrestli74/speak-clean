@@ -31,15 +31,24 @@ public final class Transcriber {
         )
         let analyzer = SpeechAnalyzer(modules: [transcriber])
 
+        guard let targetFormat = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [transcriber]) else {
+            throw Error(reason: "Could not determine audio format")
+        }
+
         let (inputSequence, inputBuilder) = AsyncStream.makeStream(of: AnalyzerInput.self)
 
         let engine = AVAudioEngine()
         let hwFormat = engine.inputNode.outputFormat(forBus: 0)
+        guard let converter = AVAudioConverter(from: hwFormat, to: targetFormat) else {
+            throw Error(reason: "Could not build audio converter \(hwFormat) → \(targetFormat)")
+        }
 
-        // Pass hw-format buffers straight through. Skip the manual
-        // AVAudioConverter — its streaming pattern produced near-empty output
-        // buffers and the analyzer handles format conversion internally.
-        let bridge = TapBridge(builder: inputBuilder)
+        let bridge = TapBridge(
+            builder: inputBuilder,
+            converter: converter,
+            targetFormat: targetFormat,
+            hwFormat: hwFormat
+        )
         engine.inputNode.installTap(onBus: 0, bufferSize: 4096, format: hwFormat) { @Sendable buffer, _ in
             bridge.handle(buffer: buffer)
         }
@@ -68,7 +77,7 @@ public final class Transcriber {
             try await analyzer.analyzeSequence(inputSequence)
         }
 
-        print("[tap] hwFormat=\(hwFormat)")
+        print("[tap] hwFormat=\(hwFormat) targetFormat=\(targetFormat)")
 
         session = Session(
             analyzer: analyzer,
@@ -90,7 +99,7 @@ public final class Transcriber {
         s.engine.stop()
         s.inputBuilder.finish()
 
-        print("[stop] yielded \(s.bridge.yieldCount) buffers, \(s.bridge.failedConversions) failed conversions")
+        print("[stop] yielded \(s.bridge.yieldCount) buffers, totalOutFrames=\(s.bridge.totalOutFrames), failed=\(s.bridge.failedConversions)")
 
         let lastSampleTime = try await s.analyzerTask.value
         print("[stop] analyzerTask lastSampleTime = \(String(describing: lastSampleTime))")
@@ -123,16 +132,51 @@ public final class Transcriber {
 
     private final class TapBridge: @unchecked Sendable {
         let builder: AsyncStream<AnalyzerInput>.Continuation
+        let converter: AVAudioConverter
+        let targetFormat: AVAudioFormat
+        let hwFormat: AVAudioFormat
         var yieldCount = 0
-        var failedConversions = 0   // kept for compatibility with [stop] log
+        var failedConversions = 0
+        var totalOutFrames: AVAudioFrameCount = 0
 
-        init(builder: AsyncStream<AnalyzerInput>.Continuation) {
+        init(builder: AsyncStream<AnalyzerInput>.Continuation,
+             converter: AVAudioConverter,
+             targetFormat: AVAudioFormat,
+             hwFormat: AVAudioFormat) {
             self.builder = builder
+            self.converter = converter
+            self.targetFormat = targetFormat
+            self.hwFormat = hwFormat
         }
 
         func handle(buffer: AVAudioPCMBuffer) {
-            builder.yield(AnalyzerInput(buffer: buffer))
-            yieldCount += 1
+            let ratio = targetFormat.sampleRate / hwFormat.sampleRate
+            let outCapacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio) + 512
+            guard let out = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: outCapacity) else {
+                failedConversions += 1
+                return
+            }
+            var provided = false
+            var err: NSError?
+            // .noDataNow (not .endOfStream) keeps the converter's resampler
+            // state alive between tap callbacks. .endOfStream would flush on
+            // every call, producing tiny output buffers.
+            _ = converter.convert(to: out, error: &err) { _, statusPtr in
+                if provided {
+                    statusPtr.pointee = .noDataNow
+                    return nil
+                }
+                provided = true
+                statusPtr.pointee = .haveData
+                return buffer
+            }
+            if err == nil && out.frameLength > 0 {
+                builder.yield(AnalyzerInput(buffer: out))
+                yieldCount += 1
+                totalOutFrames += out.frameLength
+            } else if err != nil {
+                failedConversions += 1
+            }
         }
     }
 
