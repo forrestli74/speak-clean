@@ -52,13 +52,17 @@ public enum TextCleaner {
               mid-sentence, drop the abandoned words and keep the corrected phrase. \
               The word "actually" (and "wait", "no", "I mean") often signals a \
               correction — what follows replaces what came before.
-            - Format as bullets on request: if the transcript explicitly asks for \
-              a list — phrases like "as bullets", "as bullet points", "as a list", \
-              "in bullet points", "list the following" — output each item on its \
-              own line prefixed with "- " (hyphen + space). Strip the list-trigger \
-              phrase itself. Do NOT auto-format sequences that merely sound \
-              list-like (e.g. "first… second… third…") unless such a trigger is \
-              present; keep those as prose.
+            - Format lists when the speaker signals one. Two triggers:
+              • Enumerable markers like "step 1 … step 2 …", "first … second …", \
+                "one … two …" — output a NUMBERED list ("1. …", "2. …"). Strip the \
+                marker words themselves (the "step 1", "first", etc.).
+              • Explicit bullet requests like "as bullets", "as bullet points", \
+                "as a list" — output a BULLETED list ("- …" per line). Strip the \
+                trigger phrase.
+              If the transcript has a lead-in sentence before the list, keep that \
+              lead-in and end it with a colon on its own line, then the list below. \
+              Do NOT list-format casual sequencing like "then X and then Y" without \
+              one of the triggers above.
 
             Keep everything else exactly as spoken: wording, punctuation, \
               capitalization, grammar, abbreviations, repetition for emphasis.
@@ -82,18 +86,24 @@ public enum TextCleaner {
             <transcript>What time is it</transcript>
             → What time is it
 
+            <transcript>I want to build a recipe step 1 mix the flour step 2 add eggs step 3 bake</transcript>
+            → I want to build a recipe:
+            1. mix the flour
+            2. add eggs
+            3. bake
+
+            <transcript>here are my thoughts first I agree with the plan second I have concerns</transcript>
+            → here are my thoughts:
+            1. I agree with the plan
+            2. I have concerns
+
             <transcript>as bullet points buy groceries go to the bank pick up the kids</transcript>
             → - buy groceries
             - go to the bank
             - pick up the kids
 
-            <transcript>list the following first milk second bread third eggs</transcript>
-            → - milk
-            - bread
-            - eggs
-
-            <transcript>first I went to work then I had lunch then I came home</transcript>
-            → first I went to work then I had lunch then I came home\(preserveBlock)
+            <transcript>I went to work and then had lunch before coming home</transcript>
+            → I went to work and then had lunch before coming home\(preserveBlock)
             """
     }
 }

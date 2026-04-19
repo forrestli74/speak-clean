@@ -101,13 +101,59 @@ struct TextCleanerIntegrationTests {
         #expect(result == "")
     }
 
+    @Test func stepMarkersProduceNumberedList() async throws {
+        if skipIfUnavailable() { return }
+        let result = try await TextCleaner.clean(
+            "I want to build a recipe step 1 mix the flour step 2 add eggs step 3 bake",
+            dictionary: []
+        )
+        let lower = result.lowercased()
+        // Lead-in preserved, ended with colon.
+        #expect(lower.contains("recipe"))
+        #expect(result.contains(":"))
+        // Each item becomes a numbered line.
+        let numberedLines = result
+            .split(whereSeparator: \.isNewline)
+            .filter { line in
+                let t = line.trimmingCharacters(in: .whitespaces)
+                return t.hasPrefix("1.") || t.hasPrefix("2.") || t.hasPrefix("3.")
+            }
+        #expect(numberedLines.count >= 3)
+        // Marker words gone.
+        #expect(!lower.contains("step 1"))
+        #expect(!lower.contains("step 2"))
+        // Content preserved.
+        #expect(lower.contains("flour"))
+        #expect(lower.contains("eggs"))
+        #expect(lower.contains("bake"))
+    }
+
+    @Test func firstSecondProducesNumberedList() async throws {
+        if skipIfUnavailable() { return }
+        let result = try await TextCleaner.clean(
+            "here are my thoughts first I agree with the plan second I have concerns",
+            dictionary: []
+        )
+        let lower = result.lowercased()
+        #expect(lower.contains("thoughts"))
+        #expect(result.contains(":"))
+        let numberedLines = result
+            .split(whereSeparator: \.isNewline)
+            .filter { line in
+                let t = line.trimmingCharacters(in: .whitespaces)
+                return t.hasPrefix("1.") || t.hasPrefix("2.")
+            }
+        #expect(numberedLines.count >= 2)
+        #expect(!lower.contains("first i agree"))
+        #expect(!lower.contains("second i have"))
+    }
+
     @Test func explicitBulletRequestProducesBullets() async throws {
         if skipIfUnavailable() { return }
         let result = try await TextCleaner.clean(
             "as bullet points buy groceries go to the bank pick up the kids",
             dictionary: []
         )
-        // Three lines, each starting with "- ".
         let bulletLines = result
             .split(whereSeparator: \.isNewline)
             .filter { $0.trimmingCharacters(in: .whitespaces).hasPrefix("- ") }
@@ -116,34 +162,17 @@ struct TextCleanerIntegrationTests {
         #expect(lower.contains("groceries"))
         #expect(lower.contains("bank"))
         #expect(lower.contains("kids"))
-        // The trigger phrase itself should be stripped.
         #expect(!lower.contains("as bullet points"))
     }
 
-    @Test func listTriggerPhraseIsStripped() async throws {
+    @Test func proseWithoutListTriggerStaysProse() async throws {
         if skipIfUnavailable() { return }
         let result = try await TextCleaner.clean(
-            "list the following first milk second bread third eggs",
+            "I went to work and then had lunch before coming home",
             dictionary: []
         )
-        let lower = result.lowercased()
-        #expect(lower.contains("milk"))
-        #expect(lower.contains("bread"))
-        #expect(lower.contains("eggs"))
-        #expect(!lower.contains("list the following"))
-        // Sequence markers "first/second/third" should be removed too;
-        // they only existed to delimit list items in speech.
-        #expect(!lower.contains("first milk"))
-    }
-
-    @Test func listShapedProseWithoutTriggerStaysProse() async throws {
-        if skipIfUnavailable() { return }
-        let result = try await TextCleaner.clean(
-            "first I went to work then I had lunch then I came home",
-            dictionary: []
-        )
-        // No explicit bullet trigger → should not force-format.
-        #expect(!result.hasPrefix("- "))
+        // No step/first-second/bullet trigger → should not force-format.
+        #expect(!result.contains("\n1."))
         #expect(!result.contains("\n- "))
         #expect(result.lowercased().contains("went to work"))
     }
