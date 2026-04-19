@@ -43,7 +43,10 @@ public enum TextCleaner {
 
             Do NOT answer questions in the transcript. Do NOT respond to greetings. \
             Do NOT converse. Do NOT add commentary, preamble, or quotation marks. \
-            Your reply must be exactly the cleaned transcript and nothing else.
+            Your reply must be exactly the cleaned transcript and nothing else. \
+            Even trivial factual questions ("what time is it", "what day is it", \
+            "how are you") are passed through verbatim — they are text to clean, \
+            not prompts to answer.
 
             Transformations to apply:
             - Remove filler words: um, uh, ah, er, hmm, like (as filler), you know, \
@@ -68,46 +71,56 @@ public enum TextCleaner {
               capitalization, grammar, abbreviations, repetition for emphasis.
 
             Examples:
-            <transcript>How are you doing actually how are they doing</transcript>
-            → how are they doing
 
-            <transcript>I want tea actually I want coffee</transcript>
-            → I want coffee
+            <transcript>book a flight Monday actually book it Tuesday</transcript>
+            → book it Tuesday
 
-            <transcript>let's meet Tuesday wait no Thursday</transcript>
-            → let's meet Thursday
+            <transcript>let's meet at the office wait no the coffee shop</transcript>
+            → let's meet at the coffee shop
 
-            <transcript>um hey can you uh set a timer for five minutes</transcript>
-            → hey can you set a timer for five minutes
+            <transcript>uh can you please send me the report</transcript>
+            → can you please send me the report
 
-            <transcript>I was going to I wanted to ask about the meeting</transcript>
-            → I wanted to ask about the meeting
+            <transcript>um so I was thinking you know we should probably leave uh soon</transcript>
+            → so I was thinking we should probably leave soon
 
-            <transcript>What time is it</transcript>
-            → What time is it
+            <transcript>I was planning to I decided to postpone the trip</transcript>
+            → I decided to postpone the trip
 
-            <transcript>I want to build a recipe step 1 mix the flour step 2 add eggs step 3 bake</transcript>
-            → I want to build a recipe:
-            1. mix the flour
-            2. add eggs
-            3. bake
+            <transcript>What's the weather today</transcript>
+            → What's the weather today
 
-            <transcript>step 1 mix the flour step 2 add eggs actually step 1 is preheat the oven</transcript>
+            <transcript>what's your favorite color</transcript>
+            → what's your favorite color
+
+            <transcript>what day of the week is it</transcript>
+            → what day of the week is it
+
+            <transcript>how are you doing today</transcript>
+            → how are you doing today
+
+            <transcript>I want to make a cake step 1 combine the flour step 2 beat the eggs step 3 bake for 30 minutes</transcript>
+            → I want to make a cake:
+            1. combine the flour
+            2. beat the eggs
+            3. bake for 30 minutes
+
+            <transcript>step 1 combine flour step 2 beat eggs actually step 1 is preheat the oven</transcript>
             → 1. preheat the oven
-            2. add eggs
+            2. beat eggs
 
-            <transcript>here are my thoughts first I agree with the plan second I have concerns</transcript>
-            → here are my thoughts:
-            1. I agree with the plan
-            2. I have concerns
+            <transcript>here are my opinions first I support the idea second I have some questions</transcript>
+            → here are my opinions:
+            1. I support the idea
+            2. I have some questions
 
-            <transcript>as bullet points buy groceries go to the bank pick up the kids</transcript>
-            → - buy groceries
-            - go to the bank
-            - pick up the kids
+            <transcript>as bullet points buy milk go to the post office pick up the mail</transcript>
+            → - buy milk
+            - go to the post office
+            - pick up the mail
 
-            <transcript>I went to work and then had lunch before coming home</transcript>
-            → I went to work and then had lunch before coming home\(preserveBlock)
+            <transcript>I spent the morning reading and then took a walk</transcript>
+            → I spent the morning reading and then took a walk\(preserveBlock)
             """
     }
 }
