@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What is this?
 
-speak-clean is a free, open-source macOS menu bar app (Apple Silicon) that captures mic audio, transcribes via whisper.cpp, removes filler words, and pastes clean text into the active app. A Typeless alternative.
+speak-clean is an open-source macOS menu bar app (Apple Silicon, macOS 26+) that captures mic audio, transcribes via Apple's on-device `SpeechAnalyzer`, cleans filler words via Apple Intelligence (`LanguageModelSession`), and pastes the result into the active app.
 
 ## Build & Run
 
@@ -12,45 +12,43 @@ speak-clean is a free, open-source macOS menu bar app (Apple Silicon) that captu
 swift build                                      # debug build
 swift build -c release                           # release build
 swift run speak-clean                            # run as menu bar app
-swift run speak-clean --audio f.wav              # CLI mode (profiling)
 swift test                                       # run all tests
 swift test --filter AppControllerTests           # run one test class
-swift test --filter AppControllerTests/testReset # run one test method
 ```
 
-Requires **Swift 6.2+**, macOS 13.0+. Pure SPM project — no Xcode project file.
+Requires **Swift 6.2+**, **macOS 26.0+**, a Mac that supports Apple Intelligence (Apple Silicon + ≥8 GB RAM) with Apple Intelligence enabled in System Settings. Pure SPM project — no external dependencies, no Xcode project file.
 
 ## Architecture
 
-Two targets plus tests (see `Package.swift`):
+Two targets plus tests:
 
-- **`speak-clean`** (executable) — AppDelegate, menu bar UI, global shortcut, mic recording, paste orchestration
-  - `speak_clean.swift` — entry point, CLI arg parsing, `AppDelegate` with NSStatusBar icon (3 states: idle/recording/processing), global shortcut monitor, AVAudioRecorder → transcribe → paste flow
-  - `AppController.swift` — `@MainActor` disk-state machine (`notReady` / `ready` / `error`). Owns `ManagedModel<Whisper>` and `Transcriber`; exposes `reset / clearCache (async) / markError`, and `pinnedModelName` (the model name locked-in by the last `reset()` so config changes don't race in-flight loads). Memory lifetime is owned by `ManagedModel` — no `busy` state, no `markBusy`/`markDone`.
-  - `ManagedModel<T>.swift` — **scoped lifetime** wrapper enforcing race-safe model access. Public API is three methods: `withModel { t in ... }` (load-or-join, refcount++, run body with ARC-pinned reference, refcount—, re-arm idle timer), `prewarm()` (advisory background load, no scope), `unloadWhenIdle() async` (wait for scopes to drain, then unload). `instance` is **not** observable — it cannot be read outside a scope, so callers can never see a nil-after-unload or half-loaded model. Generation counter in `startLoad` suppresses post-unload writes from in-flight loaders.
-  - `PersonalLibrary.swift` — `AppConfig` wrapping UserDefaults (`local.speakclean` suite), keyboard shortcut parser + virtual-keycode map, models/dictionary paths under `~/Library/Application Support/SpeakClean/`
-- **`SpeakCleanCore`** (library) — shared logic, testable without AppKit
-  - `Transcriber.swift` — pure stateless transcriber; caller passes in a `Whisper` instance. Loads audio via AVAudioFile (resamples to 16kHz mono float32), calls whisper.cpp, post-processes via TextCleaner
-  - `ModelManager.swift` — downloads GGML + CoreML encoder `.mlmodelc.zip` from HuggingFace `ggerganov/whisper.cpp`, unzips via `/usr/bin/unzip`, honors `Task.checkCancellation` between steps
-  - `DownloadManager.swift` — URLSession download with optional SHA256 verification (fetched best-effort from HF LFS metadata), atomic move into place
-  - `TextCleaner.swift` — regex filler/self-correction removal (temporary; will be replaced by llama.cpp + Qwen 2.5 0.5B LLM)
+- **`speak-clean`** (executable): menu bar UI, hotkey, recording orchestration.
+  - `speak_clean.swift` — entry point, `AppDelegate` with 3-item menu (Edit Dictionary / Reset / Quit), global shortcut monitor, streaming record/transcribe/clean/paste flow.
+  - `AppController.swift` — `@MainActor` 2-state machine (`.ready` / `.notReady(reason:)`). Owns a `Transcriber` and a `TextCleaner`. One public action: `reset()` re-runs availability checks.
+  - `AvailabilityChecker.swift` — protocol + `DefaultAvailabilityChecker`. Runs: `SystemLanguageModel` availability → mic permission → `DictationTranscriber.supportedLocale` → `AssetInventory.assetInstallationRequest`. Any failure produces a user-facing reason string.
+  - `PersonalLibrary.swift` — `AppConfig`: UserDefaults-backed `shortcut`, keyboard shortcut parser, dictionary file at `~/Library/Application Support/SpeakClean/dictionary.txt`, `loadDictionary()` helper.
+- **`SpeakCleanCore`** (library): reusable core.
+  - `Transcriber.swift` — `@MainActor` streaming session around `SpeechAnalyzer` + `DictationTranscriber`. `start()` installs an `AVAudioEngine` tap that converts PCM buffers and yields `AnalyzerInput` into an `AsyncStream`; `stop()` finalizes and returns the accumulated text; `cancel()` aborts.
+  - `TextCleaner.swift` — `@MainActor` wrapper around `LanguageModelSession`. Fresh session per `clean(_:dictionary:)` call; dictionary baked into `instructions(dictionary:)` as "preserve these spellings". `instructions` is `nonisolated` (pure string) so tests don't need `@MainActor`.
 
-**Data flow**: Press shortcut → `startRecording` calls `whisper.prewarm()` (background load starts) + `AVAudioRecorder.record()` (16kHz mono WAV) in parallel → release shortcut → `stopRecording` opens `whisper.withModel { whisper in transcriber.transcribe(...) }`, which awaits the prewarm, pins the model reference for the body's duration, runs whisper.cpp (CoreML ANE if available) → TextCleaner → NSPasteboard (save/restore) → CGEvent Cmd+V paste → scope exits → `ManagedModel` arms `AppConfig.modelUnloadDelay` (default 300s) idle-unload timer.
+## Data flow
 
-**Single external dependency**: [SwiftWhisper](https://github.com/exPHAT/SwiftWhisper) (wraps whisper.cpp with CoreML support)
+Press shortcut → `Transcriber.start()` starts `AVAudioEngine` and the `SpeechAnalyzer` session. Audio buffers stream into the analyzer in parallel with user speech. Release shortcut → `Transcriber.stop()` finalizes and returns accumulated text → `TextCleaner.clean(raw, dictionary:)` runs the LLM → `pasteText(cleaned)` via `NSPasteboard` + Cmd+V.
 
-## Key Design Decisions
+## Failure model
 
-- **Headless AppKit** — `.accessory` activation policy, no window, no dock icon
-- **Scoped model lifetime (`withModel`) is the one pattern for race safety.** Races like "loader writes `instance` after `unload()` nil'd it" or "detached task reads `instance` and sees nil" are **unrepresentable** — `instance` is private, and the only access path is via a scope that pins the reference for the caller's body. If you find yourself wanting to add `waitUntilReady` / `instance` back, resist: the correct answer is almost always to expand what happens *inside* a `withModel` body.
-- **`AppController` owns disk state only** (`notReady`/`ready`/`error`). Memory lifetime (load, idle unload, cancel) is internal to `ManagedModel`. `markError` records the error but does **not** force-unload — any in-flight `withModel` body completes normally; the scope's exit arms the idle timer as usual.
-- **`pinnedModelName`** is set by `reset()` and read by the `ManagedModel`'s loader closure — it stops the race where the user changes `AppConfig.model` between download and first memory-load. `reset()` triggers `unloadWhenIdle` before the new download so the next `withModel` loads under the new name.
-- **UI icon has three driving signals**, all in `AppDelegate`: `audioRecorder != nil` (recording icon), `isTranscribing` flag set inside the `withModel` Task (processing icon), and `controller.onStateChange` (processing for `.notReady`, idle for `.ready`/`.error`) as the fallback when neither recording nor transcribing.
-- **Whisper crosses actor boundary via `nonisolated(unsafe)`** — `Whisper` is non-Sendable but thread-safe internally. The `withModel` body is `@MainActor` (loader and transcribe calls run on main, like the constructor already did); inside the body, `nonisolated(unsafe) let unsafeWhisper = whisper` lets us pass the reference into the nonisolated `Transcriber.transcribe`.
-- **`Transcriber` is `@unchecked Sendable`** (not an actor) due to SwiftWhisper Sendable conflicts with Swift 6.2.
-- **CLI `--audio` mode bypasses `AppController` / `ManagedModel`** — constructs its own `ModelManager` + `Whisper` + `Transcriber` in a `Task.detached`, uses `dispatchMain()` + `exit(0)` instead of DispatchSemaphore (semaphore blocks main thread which CoreML needs). Prints timing breakdown to stderr, transcription to stdout.
-- **CoreML encoder** auto-downloaded alongside GGML model; Whisper auto-uses it if `.mlmodelc` exists, no toggle needed.
-- **`--save-audio <dir>`** keeps recorded WAVs for debugging; without it, recordings land in `NSTemporaryDirectory()` and are deleted after transcription.
+**One recovery mechanism: Reset.** Any error during availability checks, recording, or cleanup transitions `AppController` to `.notReady(reason:)`. The hotkey becomes a no-op; the menu tooltip shows the reason. User clicks "Reset" → `AppController.reset()` re-runs all availability checks. No per-error fallback paths, no auto-retry.
+
+## Key design decisions
+
+- **Headless AppKit** — `.accessory` activation policy, no window, no dock icon.
+- **`AvailabilityChecker` is a protocol** — `DefaultAvailabilityChecker` for production, `FakeChecker` in tests. `AppController` is unit-testable without any Apple framework availability.
+- **No `ManagedModel`-style lifetime wrapper** — `SpeechAnalyzer` and `LanguageModelSession` are cheap to create per session; Apple manages the underlying model memory.
+- **Streaming, not batch** — `AVAudioEngine` tap feeds `SpeechAnalyzer` live. No `AVAudioRecorder`, no WAV files. Transcription runs during speech, not after.
+- **Fresh `LanguageModelSession` per cleanup call** — no conversation state carries across utterances.
+- **Dictionary is read at each recording** — cheap, always fresh, no file watcher.
+- **No CLI mode** — removed when we switched off whisper.cpp. If debugging is needed later, add a file-driven harness then.
+- **`AnalysisContext.contextualStrings` is not wired yet** — per the design spec, the attachment point on `SpeechAnalyzer` wasn't confirmable from the docs alone. The dictionary is injected only into the LLM cleanup prompt ("preserve these spellings"). STT-side biasing can be added later if accuracy on dictionary words turns out to be the bottleneck.
 
 ## Worktrees
 
@@ -58,4 +56,6 @@ Git worktrees should be created in `.worktrees/` directory.
 
 ## Files
 
-- `idea.md` — Living document for project ideas, architecture decisions, status, and roadmap. Updated as the project evolves.
+- `idea.md` — Living document for project ideas, architecture decisions, status, and roadmap.
+- `docs/superpowers/specs/2026-04-18-native-ai-rewrite-design.md` — design spec for this rewrite.
+- `docs/superpowers/plans/2026-04-18-native-ai-rewrite.md` — implementation plan for this rewrite.
