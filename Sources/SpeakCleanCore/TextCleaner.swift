@@ -17,8 +17,8 @@ public final class TextCleaner {
         return response.content.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    /// Build the system-instruction string. Public for testing.
-    public static func instructions(dictionary: [String]) -> String {
+    /// Build the system-instruction string. Pure function; public for testing.
+    public nonisolated static func instructions(dictionary: [String]) -> String {
         let preserveBlock = dictionary.isEmpty
             ? ""
             : "\n\nPreserve these spellings exactly:\n" + dictionary.map { "- \($0)" }.joined(separator: "\n")

@@ -3,6 +3,7 @@ import Foundation
 @testable import speak_clean
 
 @Suite("loadDictionary")
+@MainActor
 struct LoadDictionaryTests {
 
     private func writing(_ contents: String, run body: (URL) throws -> Void) throws {
