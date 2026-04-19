@@ -31,24 +31,15 @@ public final class Transcriber {
         )
         let analyzer = SpeechAnalyzer(modules: [transcriber])
 
-        guard let targetFormat = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [transcriber]) else {
-            throw Error(reason: "Could not determine audio format")
-        }
-
         let (inputSequence, inputBuilder) = AsyncStream.makeStream(of: AnalyzerInput.self)
 
         let engine = AVAudioEngine()
         let hwFormat = engine.inputNode.outputFormat(forBus: 0)
-        let converter = AVAudioConverter(from: hwFormat, to: targetFormat)
 
-        // @Sendable closure + TapBridge → runs on AVFoundation's audio thread
-        // without a main-actor executor check.
-        let bridge = TapBridge(
-            builder: inputBuilder,
-            converter: converter,
-            targetFormat: targetFormat,
-            hwFormat: hwFormat
-        )
+        // Pass hw-format buffers straight through. Skip the manual
+        // AVAudioConverter — its streaming pattern produced near-empty output
+        // buffers and the analyzer handles format conversion internally.
+        let bridge = TapBridge(builder: inputBuilder)
         engine.inputNode.installTap(onBus: 0, bufferSize: 4096, format: hwFormat) { @Sendable buffer, _ in
             bridge.handle(buffer: buffer)
         }
@@ -77,7 +68,7 @@ public final class Transcriber {
             try await analyzer.analyzeSequence(inputSequence)
         }
 
-        print("[tap] hwFormat=\(hwFormat) targetFormat=\(targetFormat)")
+        print("[tap] hwFormat=\(hwFormat)")
 
         session = Session(
             analyzer: analyzer,
@@ -132,48 +123,16 @@ public final class Transcriber {
 
     private final class TapBridge: @unchecked Sendable {
         let builder: AsyncStream<AnalyzerInput>.Continuation
-        let converter: AVAudioConverter?
-        let targetFormat: AVAudioFormat
-        let hwFormat: AVAudioFormat
         var yieldCount = 0
-        var failedConversions = 0
+        var failedConversions = 0   // kept for compatibility with [stop] log
 
-        init(builder: AsyncStream<AnalyzerInput>.Continuation,
-             converter: AVAudioConverter?,
-             targetFormat: AVAudioFormat,
-             hwFormat: AVAudioFormat) {
+        init(builder: AsyncStream<AnalyzerInput>.Continuation) {
             self.builder = builder
-            self.converter = converter
-            self.targetFormat = targetFormat
-            self.hwFormat = hwFormat
         }
 
         func handle(buffer: AVAudioPCMBuffer) {
-            guard let converter else {
-                builder.yield(AnalyzerInput(buffer: buffer))
-                yieldCount += 1
-                return
-            }
-            let ratio = targetFormat.sampleRate / hwFormat.sampleRate
-            let outCapacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio) + 1024
-            guard let out = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: outCapacity) else {
-                failedConversions += 1
-                return
-            }
-            var consumed = false
-            var err: NSError?
-            converter.convert(to: out, error: &err) { _, status in
-                if consumed { status.pointee = .endOfStream; return nil }
-                consumed = true
-                status.pointee = .haveData
-                return buffer
-            }
-            if err == nil {
-                builder.yield(AnalyzerInput(buffer: out))
-                yieldCount += 1
-            } else {
-                failedConversions += 1
-            }
+            builder.yield(AnalyzerInput(buffer: buffer))
+            yieldCount += 1
         }
     }
 
