@@ -42,6 +42,11 @@ public enum TextCleaner {
                 .init(role: "user", content: wrapped),
             ],
             stream: false,
+            // Gemma 4 E2B defaults to generating a hidden reasoning block
+            // that Ollama strips from `message.content` but still charges us
+            // for in `eval_count`. For transcript cleanup we don't need the
+            // reasoning — skip it to shave ~95% of generation time.
+            think: false,
             options: .init(temperature: 0)
         )
 
@@ -72,7 +77,25 @@ public enum TextCleaner {
         if let ollamaError = decoded.error, !ollamaError.isEmpty {
             throw CleanerError(reason: "Ollama error: \(ollamaError)")
         }
-        return (decoded.message?.content ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        logOllamaTimings(decoded)
+        let rawContent = decoded.message?.content ?? ""
+        let trimmed2 = rawContent.trimmingCharacters(in: .whitespacesAndNewlines)
+        print("[ollama] content=\(rawContent.count)ch trimmed=\(trimmed2.count)ch")
+        return trimmed2
+    }
+
+    /// Format Ollama's nanosecond-scale timing fields as milliseconds
+    /// on a single `[ollama]` log line. Lets us see whether wall-clock
+    /// latency is going to load, prompt eval, or generation without
+    /// adding a new return type.
+    private static func logOllamaTimings(_ r: ChatResponse) {
+        func ms(_ ns: UInt64?) -> String {
+            guard let ns else { return "?" }
+            return String(Int(Double(ns) / 1_000_000.0))
+        }
+        let pt = r.promptEvalCount.map(String.init) ?? "?"
+        let et = r.evalCount.map(String.init) ?? "?"
+        print("[ollama] load=\(ms(r.loadDuration))ms prompt_eval=\(ms(r.promptEvalDuration))ms(\(pt)tok) eval=\(ms(r.evalDuration))ms(\(et)tok) total=\(ms(r.totalDuration))ms")
     }
 
     /// Build the system-instruction string that tells the LLM what to
@@ -196,6 +219,7 @@ public enum TextCleaner {
         let model: String
         let messages: [ChatMessage]
         let stream: Bool
+        let think: Bool
         let options: Options
 
         struct Options: Encodable {
@@ -211,9 +235,26 @@ public enum TextCleaner {
     private struct ChatResponse: Decodable {
         let message: Message?
         let error: String?
+        // Nanoseconds, all optional because Ollama omits them in error paths.
+        let loadDuration: UInt64?
+        let promptEvalDuration: UInt64?
+        let evalDuration: UInt64?
+        let totalDuration: UInt64?
+        let promptEvalCount: Int?
+        let evalCount: Int?
 
         struct Message: Decodable {
             let content: String
+        }
+
+        enum CodingKeys: String, CodingKey {
+            case message, error
+            case loadDuration = "load_duration"
+            case promptEvalDuration = "prompt_eval_duration"
+            case evalDuration = "eval_duration"
+            case totalDuration = "total_duration"
+            case promptEvalCount = "prompt_eval_count"
+            case evalCount = "eval_count"
         }
     }
 }
