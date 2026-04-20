@@ -23,17 +23,19 @@ struct AppControllerTests {
         #expect(controller.state == .notReady(reason: "No AI"))
     }
 
-    @Test @MainActor func onStateChangeFiresForEachTransition() async {
-        let controller = AppController(check: { .ready })
-        var log: [String] = []
-        controller.onStateChange = { state in
-            switch state {
-            case .ready: log.append("ready")
-            case .notReady(let r): log.append("notReady(\(r))")
-            }
+    @Test @MainActor func resetFlipsThroughCheckingState() async {
+        final class Captured: @unchecked Sendable {
+            var duringCheck: AppController.State?
+            var controller: AppController?
         }
-        await controller.reset()
-        #expect(log == ["notReady(Checking availability…)", "ready"])
+        let captured = Captured()
+        captured.controller = AppController(check: { @MainActor in
+            captured.duringCheck = captured.controller?.state
+            return .ready
+        })
+        await captured.controller!.reset()
+        #expect(captured.duringCheck == .notReady(reason: "Checking availability…"))
+        #expect(captured.controller!.state == .ready)
     }
 
     @Test @MainActor func secondResetRerunsChecks() async {
