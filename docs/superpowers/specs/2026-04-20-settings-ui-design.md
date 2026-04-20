@@ -41,16 +41,15 @@ Each field commits on Return or loss of focus (macOS System Settings style — n
 
 ### Menu-bar entry point
 
-Add a "Settings…" `Button` above "Edit Dictionary…" in the menu. Use SwiftUI's native `@Environment(\.openSettings)` action (available on macOS 14+; the project targets macOS 26+):
+Add a "Settings…" `Button` above "Edit Dictionary…" in the menu. Use SwiftUI's native `@Environment(\.openSettings)` action:
 
 ```swift
 @Environment(\.openSettings) private var openSettings
 // ...
 Button("Settings…") { openSettings() }
-    .keyboardShortcut(",", modifiers: .command)
 ```
 
-The `Settings` scene itself wires up Cmd+, automatically when the app's focus is on the settings window, but a `MenuBarExtra` menu is a different focus context — hence the explicit `.keyboardShortcut` on the button so Cmd+, works from the menu.
+No Cmd+, binding. SwiftUI's `Settings` scene auto-injects a Cmd+,-bound menu item into `NSApp.mainMenu`, but because this app is `.accessory` that menu is only rendered when a SpeakClean window is already key — so the injected shortcut is never reachable from a useful context. The MenuBarExtra menu item (clicked with the mouse) is the only entry point.
 
 ### SettingsView
 
