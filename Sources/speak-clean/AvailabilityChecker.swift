@@ -1,51 +1,49 @@
 import Foundation
 import AVFoundation
 import Speech
-import FoundationModels
+import SpeakCleanCore
 
 /// Production availability checker for `AppController`.
 ///
-/// Runs four checks in fixed order; the first one that fails short-
-/// circuits with a user-facing `reason`:
+/// Runs checks in fixed order; the first one that fails short-circuits
+/// with a user-facing `reason`:
 ///
-/// 1. `SystemLanguageModel.default.availability` — Apple Intelligence
-///    capability, enablement, and model-ready status.
-/// 2. `AVCaptureDevice.requestAccess(for: .audio)` — microphone
+/// 1. Ollama reachable at `localhost:11434` — HTTP GET to `/api/tags`.
+/// 2. The configured cleanup model (`TextCleaner.model`) is pulled.
+/// 3. `AVCaptureDevice.requestAccess(for: .audio)` — microphone
 ///    permission (prompts the user on first run).
-/// 3. `DictationTranscriber.supportedLocale(equivalentTo:)` — whether
+/// 4. `DictationTranscriber.supportedLocale(equivalentTo:)` — whether
 ///    the user's system locale has dictation assets available.
-/// 4. `AssetInventory.assetInstallationRequest(supporting:)` — if the
-///    STT assets aren't installed, download them (this can block for
-///    the first run of the app on a fresh OS install).
+/// 5. `AssetInventory.assetInstallationRequest(supporting:)` — if the
+///    STT assets aren't installed, download them (this can block on
+///    the first run on a fresh OS install).
 ///
-/// Returns `.ready` only if all four succeed. Called on launch and from
+/// Returns `.ready` only if all checks pass. Called on launch and from
 /// the "Reset" menu action.
 func runAvailabilityChecks() async -> AppController.State {
-    // 1. Apple Intelligence (Foundation Models)
-    switch SystemLanguageModel.default.availability {
-    case .available:
+    // 1. + 2. Ollama + model
+    switch await ollamaStatus() {
+    case .ok:
         break
-    case .unavailable(.deviceNotEligible):
-        return .notReady(reason: "This Mac doesn't support Apple Intelligence.")
-    case .unavailable(.appleIntelligenceNotEnabled):
-        return .notReady(reason: "Turn on Apple Intelligence in System Settings.")
-    case .unavailable(.modelNotReady):
-        return .notReady(reason: "Apple Intelligence is still setting up. Try again shortly.")
-    case .unavailable(let other):
-        return .notReady(reason: "Apple Intelligence unavailable: \(other).")
+    case .unreachable:
+        return .notReady(reason: "Ollama isn't running. Run: brew services start ollama")
+    case .missingModel:
+        return .notReady(reason: "Gemma model isn't installed. Run: ollama pull \(TextCleaner.model)")
+    case .error(let reason):
+        return .notReady(reason: "Ollama check failed: \(reason)")
     }
 
-    // 2. Microphone permission
+    // 3. Microphone permission
     guard await AVCaptureDevice.requestAccess(for: .audio) else {
         return .notReady(reason: "Microphone permission denied. Grant it in System Settings.")
     }
 
-    // 3. Locale support
+    // 4. Locale support
     guard let locale = await DictationTranscriber.supportedLocale(equivalentTo: Locale.current) else {
         return .notReady(reason: "Dictation doesn't support your locale (\(Locale.current.identifier)).")
     }
 
-    // 4. STT assets
+    // 5. STT assets
     let transcriber = DictationTranscriber(
         locale: locale,
         contentHints: [],
@@ -62,4 +60,50 @@ func runAvailabilityChecks() async -> AppController.State {
     }
 
     return .ready
+}
+
+// MARK: - Ollama probe
+
+/// Outcome of probing the local Ollama server.
+enum OllamaStatus {
+    /// Server responded and the configured model is in the pulled list.
+    case ok
+    /// Server didn't answer (not installed, not running, or wrong port).
+    case unreachable
+    /// Server answered but the configured model isn't pulled.
+    case missingModel
+    /// Server answered but returned unexpected data.
+    case error(reason: String)
+}
+
+/// Hits Ollama's `/api/tags` endpoint and verifies the configured model
+/// appears in the listed tags. Used only by `runAvailabilityChecks`.
+func ollamaStatus() async -> OllamaStatus {
+    let url = URL(string: "http://localhost:11434/api/tags")!
+    var request = URLRequest(url: url)
+    request.timeoutInterval = 5
+
+    let data: Data
+    do {
+        (data, _) = try await URLSession.shared.data(for: request)
+    } catch {
+        return .unreachable
+    }
+
+    struct Tags: Decodable {
+        let models: [Entry]
+        struct Entry: Decodable { let name: String }
+    }
+    do {
+        let tags = try JSONDecoder().decode(Tags.self, from: data)
+        let names = tags.models.map(\.name)
+        // Ollama returns names like "gemma4:e2b" or "gemma4:e2b-instruct"
+        // — match a prefix so variants count.
+        if names.contains(where: { $0.hasPrefix(TextCleaner.model) }) {
+            return .ok
+        }
+        return .missingModel
+    } catch {
+        return .error(reason: error.localizedDescription)
+    }
 }

@@ -1,29 +1,63 @@
-import FoundationModels
+import Foundation
 
 /// Filler-word and self-correction cleanup over a raw STT transcript,
-/// implemented as a thin wrapper around Apple's on-device
-/// `LanguageModelSession`. Caseless enum — no state, no instances; the
-/// session is created fresh per `clean(_:dictionary:)` call so no
-/// conversation history leaks between utterances.
+/// implemented as a thin HTTP client against a locally-running Ollama
+/// server and the `gemma4:e2b` model (Google's Gemma 4 E2B, ~2.3B
+/// effective parameters). A fresh session is created per `clean` call,
+/// so no conversation history leaks between utterances.
+///
+/// Requires `brew install ollama`, `brew services start ollama`, and
+/// `ollama pull gemma4:e2b`. `AvailabilityChecker.runAvailabilityChecks`
+/// surfaces each of those as a user-facing reason string when missing.
 public enum TextCleaner {
+
+    /// Ollama model tag used for cleanup. Change in one place if you
+    /// switch to Gemma 4 E4B, a larger variant, or a Qwen model.
+    public static let model = "gemma4:e2b"
+
+    /// Local Ollama chat endpoint. Overridable via the `url:` parameter
+    /// on `clean` for tests or future remote setups.
+    public static let endpoint = URL(string: "http://localhost:11434/api/chat")!
 
     /// Run the transcript through the LLM and return the cleaned text.
     /// The `dictionary` words are baked into the system instructions as
     /// "preserve these spellings exactly" so user-defined proper nouns
     /// survive the cleanup pass. The raw input is wrapped in an explicit
     /// `<transcript>` tag so the model sees it as data, not a question
-    /// addressed to the assistant. Throws whatever
-    /// `LanguageModelSession` throws; callers forward failures via
-    /// `AppController.setState(.notReady(...))`. Returns `""` for
-    /// whitespace-only input; otherwise returns trimmed LLM output.
-    public static func clean(_ raw: String, dictionary: [String]) async throws -> String {
+    /// addressed to the assistant.
+    public static func clean(
+        _ raw: String,
+        dictionary: [String],
+        url: URL = endpoint
+    ) async throws -> String {
         let trimmed = raw.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return "" }
 
-        let session = LanguageModelSession(instructions: instructions(dictionary: dictionary))
         let wrapped = "<transcript>\n\(trimmed)\n</transcript>"
-        let response = try await session.respond(to: wrapped)
-        return response.content.trimmingCharacters(in: .whitespacesAndNewlines)
+        let payload = ChatRequest(
+            model: model,
+            messages: [
+                .init(role: "system", content: instructions(dictionary: dictionary)),
+                .init(role: "user", content: wrapped),
+            ],
+            stream: false,
+            options: .init(temperature: 0)
+        )
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(payload)
+        request.timeoutInterval = 60
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+            let code = (response as? HTTPURLResponse)?.statusCode ?? -1
+            throw CleanerError(reason: "Ollama returned HTTP \(code)")
+        }
+
+        let decoded = try JSONDecoder().decode(ChatResponse.self, from: data)
+        return decoded.message.content.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// Build the system-instruction string that tells the LLM what to
@@ -165,5 +199,36 @@ public enum TextCleaner {
             <transcript>I spent the morning reading and then took a walk</transcript>
             → I spent the morning reading and then took a walk\(preserveBlock)
             """
+    }
+
+    // MARK: - Ollama chat wire types
+
+    public struct CleanerError: LocalizedError {
+        public let reason: String
+        public var errorDescription: String? { reason }
+    }
+
+    private struct ChatRequest: Encodable {
+        let model: String
+        let messages: [ChatMessage]
+        let stream: Bool
+        let options: Options
+
+        struct Options: Encodable {
+            let temperature: Double
+        }
+    }
+
+    private struct ChatMessage: Encodable {
+        let role: String
+        let content: String
+    }
+
+    private struct ChatResponse: Decodable {
+        let message: Message
+
+        struct Message: Decodable {
+            let content: String
+        }
     }
 }

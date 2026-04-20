@@ -4,19 +4,23 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What is this?
 
-speak-clean is an open-source macOS menu bar app (Apple Silicon, macOS 26+) that captures mic audio, transcribes via Apple's on-device `SpeechAnalyzer`, cleans filler words via Apple Intelligence (`LanguageModelSession`), and pastes the result into the active app.
+speak-clean is an open-source macOS menu bar app (Apple Silicon, macOS 26+) that captures mic audio, transcribes via Apple's on-device `SpeechAnalyzer`, cleans filler words via a local Ollama-served Gemma 4 E2B model, and pastes the result into the active app.
 
 ## Build & Run
 
 ```bash
-swift build                                      # debug build
-swift build -c release                           # release build
-swift run speak-clean                            # run as menu bar app
-swift test                                       # run all tests
-swift test --filter AppControllerTests           # run one test class
+brew install ollama                   # once
+brew services start ollama            # once (persists across reboots)
+ollama pull gemma4:e2b                # once, ~7 GB download
+
+swift build                           # debug build
+swift build -c release                # release build
+swift run speak-clean                 # run as menu bar app
+swift test                            # run all tests (integration tests skip if Ollama is down)
+swift test --filter AppControllerTests
 ```
 
-Requires **Swift 6.2+**, **macOS 26.0+**, a Mac that supports Apple Intelligence (Apple Silicon + ≥8 GB RAM) with Apple Intelligence enabled in System Settings. Pure SPM project — no external dependencies, no Xcode project file.
+Requires **Swift 6.2+**, **macOS 26.0+**, Apple Silicon. Ollama + `gemma4:e2b` is the external runtime dependency — there is no bundled LLM. Pure SPM project — no Swift package dependencies, no Xcode project file.
 
 ## Architecture
 
@@ -24,31 +28,33 @@ Two targets plus tests:
 
 - **`speak-clean`** (executable): menu bar UI, hotkey, recording orchestration.
   - `speak_clean.swift` — entry point, `AppDelegate` with 3-item menu (Edit Dictionary / Reset / Quit), global shortcut monitor, streaming record/transcribe/clean/paste flow.
-  - `AppController.swift` — `@MainActor` 2-state machine (`.ready` / `.notReady(reason:)`). Owns a `Transcriber` and a `TextCleaner`. One public action: `reset()` re-runs availability checks.
-  - `AvailabilityChecker.swift` — protocol + `DefaultAvailabilityChecker`. Runs: `SystemLanguageModel` availability → mic permission → `DictationTranscriber.supportedLocale` → `AssetInventory.assetInstallationRequest`. Any failure produces a user-facing reason string.
+  - `AppController.swift` — `@MainActor` 2-state machine (`.ready` / `.notReady(reason:)`). Owns the `Transcriber`. One public action: `reset()` re-runs availability checks.
+  - `AvailabilityChecker.swift` — `runAvailabilityChecks()` free function. Checks, in order: Ollama reachable → model pulled → mic permission → `DictationTranscriber.supportedLocale` → `AssetInventory.assetInstallationRequest`. Any failure produces a user-facing reason string with the shell command to fix it.
   - `PersonalLibrary.swift` — `AppConfig`: UserDefaults-backed `shortcut`, keyboard shortcut parser, dictionary file at `~/Library/Application Support/SpeakClean/dictionary.txt`, `loadDictionary()` helper.
 - **`SpeakCleanCore`** (library): reusable core.
   - `Transcriber.swift` — `@MainActor` streaming session around `SpeechAnalyzer` + `DictationTranscriber`. `start()` installs an `AVAudioEngine` tap that converts PCM buffers and yields `AnalyzerInput` into an `AsyncStream`; `stop()` finalizes and returns the accumulated text; `cancel()` aborts.
-  - `TextCleaner.swift` — `@MainActor` wrapper around `LanguageModelSession`. Fresh session per `clean(_:dictionary:)` call; dictionary baked into `instructions(dictionary:)` as "preserve these spellings". `instructions` is `nonisolated` (pure string) so tests don't need `@MainActor`.
+  - `TextCleaner.swift` — caseless enum that POSTs to Ollama's `/api/chat` endpoint using the `gemma4:e2b` model. `clean(_:dictionary:)` wraps the raw transcript in `<transcript>` tags and bakes the user's dictionary into the system prompt as "preserve these spellings exactly". `instructions(dictionary:)` exposes the prompt-building for unit tests.
 
 ## Data flow
 
-Press shortcut → `Transcriber.start()` starts `AVAudioEngine` and the `SpeechAnalyzer` session. Audio buffers stream into the analyzer in parallel with user speech. Release shortcut → `Transcriber.stop()` finalizes and returns accumulated text → `TextCleaner.clean(raw, dictionary:)` runs the LLM → `pasteText(cleaned)` via `NSPasteboard` + Cmd+V.
+Press shortcut → `Transcriber.start()` starts `AVAudioEngine` and the `SpeechAnalyzer` session. Audio buffers stream into the analyzer in parallel with user speech. Release shortcut → `Transcriber.stop()` finalizes and returns accumulated text → `TextCleaner.clean(raw, dictionary:)` POSTs to Ollama → `pasteText(cleaned)` via `NSPasteboard` + Cmd+V.
 
 ## Failure model
 
 **One recovery mechanism: Reset.** Any error during availability checks, recording, or cleanup transitions `AppController` to `.notReady(reason:)`. The hotkey becomes a no-op; the menu tooltip shows the reason. User clicks "Reset" → `AppController.reset()` re-runs all availability checks. No per-error fallback paths, no auto-retry.
 
+Reasons surfaced by the availability checker are actionable — e.g. `"Ollama isn't running. Run: brew services start ollama"` or `"Gemma model isn't installed. Run: ollama pull gemma4:e2b"`.
+
 ## Key design decisions
 
 - **Headless AppKit** — `.accessory` activation policy, no window, no dock icon.
-- **`AvailabilityChecker` is a protocol** — `DefaultAvailabilityChecker` for production, `FakeChecker` in tests. `AppController` is unit-testable without any Apple framework availability.
-- **No `ManagedModel`-style lifetime wrapper** — `SpeechAnalyzer` and `LanguageModelSession` are cheap to create per session; Apple manages the underlying model memory.
-- **Streaming, not batch** — `AVAudioEngine` tap feeds `SpeechAnalyzer` live. No `AVAudioRecorder`, no WAV files. Transcription runs during speech, not after.
-- **Fresh `LanguageModelSession` per cleanup call** — no conversation state carries across utterances.
+- **Local Ollama + Gemma 4 E2B for cleanup** — chose over Apple's Foundation Models (`LanguageModelSession`) after a benchmark showed Gemma 4 E2B passes 27/27 prompt tests deterministically while Apple's 3B foundation model had 4 intermittently-failing cases (over-helpful responses to questions and greetings). The tradeoff is a 7 GB local model download and an Ollama runtime dependency.
+- **Streaming STT (Apple-native), not batch** — `AVAudioEngine` tap feeds `SpeechAnalyzer` live. No `AVAudioRecorder`, no WAV files. Transcription runs during speech, not after.
+- **Fresh Ollama chat session per `clean` call** — no conversation state carries across utterances.
 - **Dictionary is read at each recording** — cheap, always fresh, no file watcher.
+- **`TextCleaner` is a caseless enum (no instance, not @MainActor)** — it's a stateless HTTP client; `URLSession` is thread-safe.
 - **No CLI mode** — removed when we switched off whisper.cpp. If debugging is needed later, add a file-driven harness then.
-- **`AnalysisContext.contextualStrings` is not wired yet** — per the design spec, the attachment point on `SpeechAnalyzer` wasn't confirmable from the docs alone. The dictionary is injected only into the LLM cleanup prompt ("preserve these spellings"). STT-side biasing can be added later if accuracy on dictionary words turns out to be the bottleneck.
+- **`AnalysisContext.contextualStrings` is not wired yet** — per the design spec, the attachment point on `SpeechAnalyzer` wasn't confirmable from the docs. The dictionary is injected only into the cleanup prompt. STT-side biasing can be added later if accuracy on dictionary words turns out to be the bottleneck.
 
 ## Worktrees
 
@@ -57,5 +63,5 @@ Git worktrees should be created in `.worktrees/` directory.
 ## Files
 
 - `idea.md` — Living document for project ideas, architecture decisions, status, and roadmap.
-- `docs/superpowers/specs/2026-04-18-native-ai-rewrite-design.md` — design spec for this rewrite.
-- `docs/superpowers/plans/2026-04-18-native-ai-rewrite.md` — implementation plan for this rewrite.
+- `docs/superpowers/specs/2026-04-18-native-ai-rewrite-design.md` — design spec for the native-AI rewrite (Apple FM era; cleaner has since been swapped for Gemma 4 E2B).
+- `docs/superpowers/plans/2026-04-18-native-ai-rewrite.md` — implementation plan for the same rewrite.
