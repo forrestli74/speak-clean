@@ -104,18 +104,15 @@ public enum TextCleaner {
               mid-sentence, drop the abandoned words and keep the corrected phrase. \
               The word "actually" (and "wait", "no", "I mean") often signals a \
               correction — what follows replaces what came before.
-            - Format as a list when the speaker signals one, one item per line. \
-              ONLY these triggers count:
-              • Digit-numbered markers: "step 1 X step 2 Y step 3 Z" or \
-                "number 1 X number 2 Y number 3 Z" — items on their own lines.
-              • Explicit "as bullets", "as bullet points", "as a list" requests.
-              Any list marker style in the output is fine (either "- " or \
-              numbered "1."). Strip the sequence markers from output. If the \
-              transcript has a lead-in sentence before the list, keep that \
-              lead-in and end it with a colon on its own line, then the list \
-              below. Do NOT list-format any other sequencing — including \
-              "first / second / third", "first step / second step", "first X \
-              then Y next Z", or casual "and then" chains. Those stay as prose.
+            - Format as a list when the speaker enumerates items: digit \
+              markers ("step 1 / step 2 / step 3", "number 1 / number 2 / \
+              number 3"), ordinal markers ("first / second / third", \
+              "first step / second step", "first X then Y next Z"), or \
+              explicit "as bullets" / "as a list" requests. Any list marker \
+              style in output is fine ("- " or "1."). Strip the sequence \
+              markers. If there's a lead-in sentence before the list, keep \
+              it and end with a colon on its own line before the list. \
+              Casual "and then" flow without enumeration markers stays prose.
 
             Keep everything else exactly as spoken: wording, punctuation, \
               capitalization, grammar, abbreviations, repetition for emphasis.
@@ -165,13 +162,7 @@ public enum TextCleaner {
             - pick up the mail
 
             <transcript>I spent the morning reading and then took a walk</transcript>
-            → I spent the morning reading and then took a walk
-
-            <transcript>here are my thoughts first I agree with the plan second I have concerns</transcript>
-            → here are my thoughts first I agree with the plan second I have concerns
-
-            <transcript>please first wash the car then vacuum and next fill up the gas</transcript>
-            → please first wash the car then vacuum and next fill up the gas\(preserveBlock)
+            → I spent the morning reading and then took a walk\(preserveBlock)
             """
     }
 
