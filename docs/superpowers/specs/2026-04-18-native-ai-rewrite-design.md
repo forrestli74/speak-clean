@@ -2,7 +2,7 @@
 
 **Date:** 2026-04-18
 **Branch:** `feature/native-ai`
-**Status:** Spec; ready for implementation plan.
+**Status:** Spec; implemented. **Superseded for the cleanup engine only:** the text-cleanup section below targeted Apple's `LanguageModelSession` (Foundation Models). The shipped code uses a local Ollama server + Gemma 4 E2B instead. See `docs/superpowers/specs/2026-04-20-ollama-gemma-cleaner.md` for the swap rationale. The STT side (`SpeechAnalyzer` + `DictationTranscriber`) and the state machine / failure model are unchanged.
 
 ## Goal
 

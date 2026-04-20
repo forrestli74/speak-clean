@@ -179,15 +179,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Begin recording if the controller is `.ready` and there's no
     /// outstanding stop task. On error, flips the app to `.notReady`
     /// (user must hit Reset).
+    ///
+    /// Sets `isRecording = true` synchronously before awaiting `start()`
+    /// so two rapidly-fired hotkey events in the same main-actor tick
+    /// can't both enter the body and then both call `transcriber.start()`
+    /// (which would throw `alreadyRecording` on the second one and kick
+    /// the app to `.notReady`).
     private func startRecording() {
-        guard case .ready = controller.state, inFlight == nil else { return }
+        guard case .ready = controller.state, inFlight == nil, !isRecording else { return }
+        isRecording = true
+        setIcon(MenuBarIcon.recording())
         Task { @MainActor in
             do {
                 try await controller.transcriber.start()
-                isRecording = true
-                setIcon(MenuBarIcon.recording())
             } catch {
                 print("[recording] start failed: \(error)")
+                isRecording = false
+                setIcon(MenuBarIcon.idle())
                 controller.setState(.notReady(reason: "Recording start failed: \(error.localizedDescription)"))
             }
         }
@@ -217,6 +225,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 )
                 let t2 = CFAbsoluteTimeGetCurrent()
                 print("[cleaned] \(cleaned.isEmpty ? "(empty)" : cleaned) — clean=\(Self.ms(t2 - t1))ms total=\(Self.ms(t2 - t0))ms")
+                if cleaned.isEmpty && !raw.isEmpty {
+                    // LLM returned nothing for non-empty speech — log it so
+                    // a user debugging "I said something and nothing pasted"
+                    // has a trail. Empty speech → empty paste is the normal
+                    // silent-press case.
+                    print("[cleaned] LLM returned empty for non-empty transcript")
+                }
                 if !cleaned.isEmpty {
                     self?.pasteText(cleaned)
                 }

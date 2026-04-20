@@ -46,6 +46,10 @@ enum AppConfig {
     /// Change with `defaults write local.speakclean cleanupModel "llama3.2:3b"`.
     /// The app re-checks availability on launch and from the Reset menu
     /// item, so `ollama pull <model>` is the only other step needed.
+    ///
+    /// Note: the prompt in `TextCleaner.instructions` is hand-tuned against
+    /// Gemma 4 E2B. Other models will still work but may need prompt-example
+    /// tweaks to hit the same pass rate on the integration test suite.
     static var cleanupModel: String {
         get { defaults.string(forKey: "cleanupModel")! }
         set { defaults.set(newValue, forKey: "cleanupModel") }

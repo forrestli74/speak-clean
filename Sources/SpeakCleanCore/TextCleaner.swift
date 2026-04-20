@@ -51,14 +51,28 @@ public enum TextCleaner {
         request.httpBody = try JSONEncoder().encode(payload)
         request.timeoutInterval = 60
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await URLSession.shared.data(for: request)
+        } catch {
+            // Network-layer failure: surface an actionable reason instead of
+            // the raw NSURLErrorDomain code that localizedDescription produces.
+            throw CleanerError(reason: "Ollama unreachable — is it running? (\(error.localizedDescription))")
+        }
         guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
             let code = (response as? HTTPURLResponse)?.statusCode ?? -1
             throw CleanerError(reason: "Ollama returned HTTP \(code)")
         }
 
+        // Ollama can return 200 with an `error` field when the request was
+        // malformed or the model is missing — handle that before decoding
+        // the happy-path `message` field.
         let decoded = try JSONDecoder().decode(ChatResponse.self, from: data)
-        return decoded.message.content.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let ollamaError = decoded.error, !ollamaError.isEmpty {
+            throw CleanerError(reason: "Ollama error: \(ollamaError)")
+        }
+        return (decoded.message?.content ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// Build the system-instruction string that tells the LLM what to
@@ -191,7 +205,8 @@ public enum TextCleaner {
     }
 
     private struct ChatResponse: Decodable {
-        let message: Message
+        let message: Message?
+        let error: String?
 
         struct Message: Decodable {
             let content: String
