@@ -11,9 +11,9 @@ import Foundation
 /// surfaces each of those as a user-facing reason string when missing.
 public enum TextCleaner {
 
-    /// Ollama model tag used for cleanup. Change in one place if you
-    /// switch to Gemma 4 E4B, a larger variant, or a Qwen model.
-    public static let model = "gemma4:e2b"
+    /// Default Ollama model tag when the caller doesn't pass one.
+    /// Consumers in the app target override via `AppConfig.cleanupModel`.
+    public static let defaultModel = "gemma4:e2b"
 
     /// Local Ollama chat endpoint. Overridable via the `url:` parameter
     /// on `clean` for tests or future remote setups.
@@ -28,6 +28,7 @@ public enum TextCleaner {
     public static func clean(
         _ raw: String,
         dictionary: [String],
+        model: String = defaultModel,
         url: URL = endpoint
     ) async throws -> String {
         let trimmed = raw.trimmingCharacters(in: .whitespaces)
@@ -89,20 +90,18 @@ public enum TextCleaner {
               mid-sentence, drop the abandoned words and keep the corrected phrase. \
               The word "actually" (and "wait", "no", "I mean") often signals a \
               correction — what follows replaces what came before.
-            - Format as a list when the speaker signals one, one item per line:
-              • "step 1 X step 2 Y step 3 Z" — items on their own lines.
-              • "first X second Y third Z" ordinal enumerations — same.
-              • "first step X second step Y" or "first X then Y next Z" \
-                instructional sequences — same.
-              • Explicit "as bullets", "as bullet points", "as a list" requests \
-                — same.
-              Any list marker style is fine (either "- " or numbered "1."); the \
-              examples use both and either is acceptable for any case. Strip \
-              the sequence markers from output. If the transcript has a lead-in \
-              sentence before the list, keep that lead-in and end it with a \
-              colon on its own line, then the list below. Do NOT list-format \
-              casual sequencing like "A and then B and C" without one of these \
-              triggers.
+            - Format as a list when the speaker signals one, one item per line. \
+              ONLY these triggers count:
+              • Digit-numbered markers: "step 1 X step 2 Y step 3 Z" or \
+                "number 1 X number 2 Y number 3 Z" — items on their own lines.
+              • Explicit "as bullets", "as bullet points", "as a list" requests.
+              Any list marker style in the output is fine (either "- " or \
+              numbered "1."). Strip the sequence markers from output. If the \
+              transcript has a lead-in sentence before the list, keep that \
+              lead-in and end it with a colon on its own line, then the list \
+              below. Do NOT list-format any other sequencing — including \
+              "first / second / third", "first step / second step", "first X \
+              then Y next Z", or casual "and then" chains. Those stay as prose.
 
             Keep everything else exactly as spoken: wording, punctuation, \
               capitalization, grammar, abbreviations, repetition for emphasis.
@@ -146,50 +145,11 @@ public enum TextCleaner {
             → 1. preheat the oven
             2. beat eggs
 
-            <transcript>here are my opinions first I support the idea second I have some questions</transcript>
-            → here are my opinions:
-            - I support the idea
-            - I have some questions
-
-            <transcript>please first wash the car then vacuum the inside and next fill up the gas</transcript>
-            → - wash the car
-            - vacuum the inside
-            - fill up the gas
-
-            <transcript>can you first email the team then book the meeting room and also order lunch</transcript>
-            → - email the team
-            - book the meeting room
-            - order lunch
-
-            <transcript>let's write a book first step outline the chapters second step draft the first chapter third step edit for clarity</transcript>
-            → let's write a book:
-            - outline the chapters
-            - draft the first chapter
-            - edit for clarity
-
-            <transcript>our plan first step research the market second step build a prototype third step launch</transcript>
-            → our plan:
-            - research the market
-            - build a prototype
-            - launch
-
-            <transcript>can you please first fix the bug then update the docs and next merge the PR</transcript>
-            → - fix the bug
-            - update the docs
-            - merge the PR
-
-            <transcript>Let's plan a trip. First step, book flights. Second step, reserve hotel. Third step, pack bags.</transcript>
-            → Let's plan a trip:
-            - book flights
-            - reserve hotel
-            - pack bags
-
-            <transcript>Let's design a website. First step, choose a domain. Second step, pick a theme. And the third step is to write content. And the last step, publish it.</transcript>
-            → Let's design a website:
-            - choose a domain
-            - pick a theme
-            - write content
-            - publish it
+            <transcript>here are my goals number 1 get in shape number 2 learn Spanish number 3 read more books</transcript>
+            → here are my goals:
+            1. get in shape
+            2. learn Spanish
+            3. read more books
 
             <transcript>as bullet points buy milk go to the post office pick up the mail</transcript>
             → - buy milk
@@ -197,7 +157,13 @@ public enum TextCleaner {
             - pick up the mail
 
             <transcript>I spent the morning reading and then took a walk</transcript>
-            → I spent the morning reading and then took a walk\(preserveBlock)
+            → I spent the morning reading and then took a walk
+
+            <transcript>here are my thoughts first I agree with the plan second I have concerns</transcript>
+            → here are my thoughts first I agree with the plan second I have concerns
+
+            <transcript>please first wash the car then vacuum and next fill up the gas</transcript>
+            → please first wash the car then vacuum and next fill up the gas\(preserveBlock)
             """
     }
 

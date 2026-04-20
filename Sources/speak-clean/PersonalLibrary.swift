@@ -17,6 +17,7 @@ enum AppConfig {
         let d = UserDefaults(suiteName: suiteName)!
         d.register(defaults: [
             "shortcut": "option+space",
+            "cleanupModel": "gemma4:e2b",
         ])
         return d
     }()
@@ -39,6 +40,15 @@ enum AppConfig {
     static var shortcut: String {
         get { defaults.string(forKey: "shortcut")! }
         set { defaults.set(newValue, forKey: "shortcut") }
+    }
+
+    /// Ollama model tag used for transcript cleanup, e.g. `"gemma4:e2b"`.
+    /// Change with `defaults write local.speakclean cleanupModel "llama3.2:3b"`.
+    /// The app re-checks availability on launch and from the Reset menu
+    /// item, so `ollama pull <model>` is the only other step needed.
+    static var cleanupModel: String {
+        get { defaults.string(forKey: "cleanupModel")! }
+        set { defaults.set(newValue, forKey: "cleanupModel") }
     }
 
     /// Parse `shortcut` into an `(NSEvent.ModifierFlags, keyCode)` pair

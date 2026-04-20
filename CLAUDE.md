@@ -11,7 +11,10 @@ speak-clean is an open-source macOS menu bar app (Apple Silicon, macOS 26+) that
 ```bash
 brew install ollama                   # once
 brew services start ollama            # once (persists across reboots)
-ollama pull gemma4:e2b                # once, ~7 GB download
+ollama pull gemma4:e2b                # once, ~7 GB download (default)
+# Or switch model (any Ollama tag) — no recompile needed:
+# defaults write local.speakclean cleanupModel "llama3.2:3b"
+# ollama pull llama3.2:3b
 
 swift build                           # debug build
 swift build -c release                # release build
@@ -30,10 +33,10 @@ Two targets plus tests:
   - `speak_clean.swift` — entry point, `AppDelegate` with 3-item menu (Edit Dictionary / Reset / Quit), global shortcut monitor, streaming record/transcribe/clean/paste flow.
   - `AppController.swift` — `@MainActor` 2-state machine (`.ready` / `.notReady(reason:)`). Owns the `Transcriber`. One public action: `reset()` re-runs availability checks.
   - `AvailabilityChecker.swift` — `runAvailabilityChecks()` free function. Checks, in order: Ollama reachable → model pulled → mic permission → `DictationTranscriber.supportedLocale` → `AssetInventory.assetInstallationRequest`. Any failure produces a user-facing reason string with the shell command to fix it.
-  - `PersonalLibrary.swift` — `AppConfig`: UserDefaults-backed `shortcut`, keyboard shortcut parser, dictionary file at `~/Library/Application Support/SpeakClean/dictionary.txt`, `loadDictionary()` helper.
+  - `PersonalLibrary.swift` — `AppConfig`: UserDefaults-backed `shortcut` and `cleanupModel` (Ollama tag, default `gemma4:e2b`), keyboard shortcut parser, dictionary file at `~/Library/Application Support/SpeakClean/dictionary.txt`, `loadDictionary()` helper.
 - **`SpeakCleanCore`** (library): reusable core.
   - `Transcriber.swift` — `@MainActor` streaming session around `SpeechAnalyzer` + `DictationTranscriber`. `start()` installs an `AVAudioEngine` tap that converts PCM buffers and yields `AnalyzerInput` into an `AsyncStream`; `stop()` finalizes and returns the accumulated text; `cancel()` aborts.
-  - `TextCleaner.swift` — caseless enum that POSTs to Ollama's `/api/chat` endpoint using the `gemma4:e2b` model. `clean(_:dictionary:)` wraps the raw transcript in `<transcript>` tags and bakes the user's dictionary into the system prompt as "preserve these spellings exactly". `instructions(dictionary:)` exposes the prompt-building for unit tests.
+  - `TextCleaner.swift` — caseless enum that POSTs to Ollama's `/api/chat` endpoint. `clean(_:dictionary:model:)` accepts the model tag as a parameter (default `TextCleaner.defaultModel = "gemma4:e2b"`); the app target passes `AppConfig.cleanupModel` so the user can swap models via `defaults write`. `instructions(dictionary:)` exposes prompt-building for unit tests.
 
 ## Data flow
 

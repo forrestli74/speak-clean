@@ -9,7 +9,7 @@ import SpeakCleanCore
 /// with a user-facing `reason`:
 ///
 /// 1. Ollama reachable at `localhost:11434` — HTTP GET to `/api/tags`.
-/// 2. The configured cleanup model (`TextCleaner.model`) is pulled.
+/// 2. The configured cleanup model is pulled.
 /// 3. `AVCaptureDevice.requestAccess(for: .audio)` — microphone
 ///    permission (prompts the user on first run).
 /// 4. `DictationTranscriber.supportedLocale(equivalentTo:)` — whether
@@ -19,16 +19,18 @@ import SpeakCleanCore
 ///    the first run on a fresh OS install).
 ///
 /// Returns `.ready` only if all checks pass. Called on launch and from
-/// the "Reset" menu action.
-func runAvailabilityChecks() async -> AppController.State {
+/// the "Reset" menu action. `cleanupModel` should be the value of
+/// `AppConfig.cleanupModel` at check time, passed in so this function
+/// stays off the main actor.
+func runAvailabilityChecks(cleanupModel: String) async -> AppController.State {
     // 1. + 2. Ollama + model
-    switch await ollamaStatus() {
+    switch await ollamaStatus(model: cleanupModel) {
     case .ok:
         break
     case .unreachable:
         return .notReady(reason: "Ollama isn't running. Run: brew services start ollama")
     case .missingModel:
-        return .notReady(reason: "Gemma model isn't installed. Run: ollama pull \(TextCleaner.model)")
+        return .notReady(reason: "Model isn't installed. Run: ollama pull \(cleanupModel)")
     case .error(let reason):
         return .notReady(reason: "Ollama check failed: \(reason)")
     }
@@ -76,9 +78,9 @@ enum OllamaStatus {
     case error(reason: String)
 }
 
-/// Hits Ollama's `/api/tags` endpoint and verifies the configured model
+/// Hits Ollama's `/api/tags` endpoint and verifies the given model tag
 /// appears in the listed tags. Used only by `runAvailabilityChecks`.
-func ollamaStatus() async -> OllamaStatus {
+func ollamaStatus(model: String) async -> OllamaStatus {
     let url = URL(string: "http://localhost:11434/api/tags")!
     var request = URLRequest(url: url)
     request.timeoutInterval = 5
@@ -97,9 +99,8 @@ func ollamaStatus() async -> OllamaStatus {
     do {
         let tags = try JSONDecoder().decode(Tags.self, from: data)
         let names = tags.models.map(\.name)
-        // Ollama returns names like "gemma4:e2b" or "gemma4:e2b-instruct"
-        // — match a prefix so variants count.
-        if names.contains(where: { $0.hasPrefix(TextCleaner.model) }) {
+        // Match the configured tag exactly.
+        if names.contains(model) {
             return .ok
         }
         return .missingModel

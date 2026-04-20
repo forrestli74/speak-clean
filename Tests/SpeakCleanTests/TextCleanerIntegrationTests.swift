@@ -150,54 +150,33 @@ struct TextCleanerIntegrationTests {
         #expect(!lower.contains("actually"))
     }
 
-    @Test func firstSecondProducesList() async throws {
+    @Test func numberMarkersProduceList() async throws {
+        if await skipIfUnavailable() { return }
+        let result = try await TextCleaner.clean(
+            "here are my goals number 1 save money number 2 learn guitar number 3 travel more",
+            dictionary: []
+        )
+        let lower = result.lowercased()
+        #expect(lower.contains("goals"))
+        #expect(result.contains(":"))
+        #expect(listLineCount(result) >= 3)
+        #expect(!lower.contains("number 1"))
+        #expect(!lower.contains("number 2"))
+        #expect(lower.contains("save money"))
+        #expect(lower.contains("learn guitar"))
+        #expect(lower.contains("travel more"))
+    }
+
+    @Test func firstSecondWithoutStepStaysProse() async throws {
         if await skipIfUnavailable() { return }
         let result = try await TextCleaner.clean(
             "here are my thoughts first I agree with the plan second I have concerns",
             dictionary: []
         )
-        let lower = result.lowercased()
-        #expect(lower.contains("thoughts"))
-        #expect(result.contains(":"))
-        #expect(listLineCount(result) >= 2)
-        #expect(!lower.contains("first i agree"))
-        #expect(!lower.contains("second i have"))
-    }
-
-    @Test func mixedSequentialMarkersProduceList() async throws {
-        if await skipIfUnavailable() { return }
-        let result = try await TextCleaner.clean(
-            "Can you please first clean up the room then take a shower and next go to bed",
-            dictionary: []
-        )
-        let lower = result.lowercased()
-        #expect(listLineCount(result) >= 3)
-        #expect(lower.contains("room"))
-        #expect(lower.contains("shower"))
-        #expect(lower.contains("bed"))
-        #expect(!lower.contains("first clean"))
-        #expect(!lower.contains("then take"))
-        #expect(!lower.contains("next go"))
-    }
-
-    @Test func firstStepSecondStepProducesList() async throws {
-        if await skipIfUnavailable() { return }
-        let result = try await TextCleaner.clean(
-            "Let's build an app. First step, as to do a high-level design. Second level, is doing an implementation plan. And the third step is to review. And the last step, to the actual implementation.",
-            dictionary: []
-        )
-        let lower = result.lowercased()
-        #expect(lower.contains("build an app"))
-        #expect(result.contains(":"))
-        #expect(listLineCount(result) >= 4)
-        #expect(lower.contains("design"))
-        #expect(lower.contains("implementation plan"))
-        #expect(lower.contains("review"))
-        #expect(lower.contains("actual implementation"))
-        #expect(!lower.contains("first step"))
-        #expect(!lower.contains("second level"))
-        #expect(!lower.contains("third step"))
-        #expect(!lower.contains("last step"))
+        // "first/second" without "step N" is NOT a list trigger in the v2 prompt.
+        #expect(listLineCount(result) == 0)
+        #expect(result.lowercased().contains("first i agree"))
+        #expect(result.lowercased().contains("second i have"))
     }
 
     @Test func explicitBulletRequestProducesList() async throws {

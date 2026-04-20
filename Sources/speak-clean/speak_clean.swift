@@ -210,7 +210,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 let raw = try await controller.transcriber.stop()
                 let t1 = CFAbsoluteTimeGetCurrent()
                 print("[raw] \(raw.isEmpty ? "(empty)" : raw) — transcribe=\(Self.ms(t1 - t0))ms")
-                let cleaned = try await TextCleaner.clean(raw, dictionary: AppConfig.loadDictionary())
+                let cleaned = try await TextCleaner.clean(
+                    raw,
+                    dictionary: AppConfig.loadDictionary(),
+                    model: AppConfig.cleanupModel
+                )
                 let t2 = CFAbsoluteTimeGetCurrent()
                 print("[cleaned] \(cleaned.isEmpty ? "(empty)" : cleaned) — clean=\(Self.ms(t2 - t1))ms total=\(Self.ms(t2 - t0))ms")
                 if !cleaned.isEmpty {
@@ -265,7 +269,13 @@ enum Main {
     static func main() {
         let app = NSApplication.shared
         app.setActivationPolicy(.accessory)
-        let controller = AppController(check: runAvailabilityChecks)
+        let controller = AppController(check: {
+            // Read the user-configured model on the main actor at each
+            // check time, so changing `defaults write local.speakclean
+            // cleanupModel …` takes effect on the next Reset.
+            let model = await MainActor.run { AppConfig.cleanupModel }
+            return await runAvailabilityChecks(cleanupModel: model)
+        })
         let delegate = AppDelegate(controller: controller)
         app.delegate = delegate
         app.run()
