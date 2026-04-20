@@ -85,7 +85,10 @@ struct SpeakCleanApp: App {
     @State private var coordinator = RecordingCoordinator()
 
     init() {
-        NSApp.setActivationPolicy(.accessory)
+        // `NSApp` is nil inside a SwiftUI `@main App`'s init — the shared
+        // `NSApplication` isn't created until something accesses `.shared`.
+        // Use `.shared` directly to both create and configure it.
+        NSApplication.shared.setActivationPolicy(.accessory)
     }
 
     var body: some Scene {
