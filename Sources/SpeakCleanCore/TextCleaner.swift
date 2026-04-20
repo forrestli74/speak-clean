@@ -104,6 +104,14 @@ public enum TextCleaner {
               mid-sentence, drop the abandoned words and keep the corrected phrase. \
               The word "actually" (and "wait", "no", "I mean") often signals a \
               correction — what follows replaces what came before.
+            - Convert spoken punctuation to actual punctuation — the speaker \
+              said the word but meant the mark: "period" → ".", "comma" → ",", \
+              "question mark" → "?", "exclamation mark" / "exclamation point" → \
+              "!", "new line" → line break, "new paragraph" → two line breaks.
+            - Convert multi-word spoken numbers to digits: "twenty three" → \
+              "23", "one hundred" → "100", "two thousand seventeen" → "2017". \
+              Single-digit numbers spoken naturally in prose ("I have two cats") \
+              can stay as words.
             - Format as a list when the speaker enumerates items: digit \
               markers ("step 1 / step 2 / step 3", "number 1 / number 2 / \
               number 3"), ordinal markers ("first / second / third", \
@@ -133,6 +141,17 @@ public enum TextCleaner {
 
             <transcript>I was planning to I decided to postpone the trip</transcript>
             → I decided to postpone the trip
+
+            <transcript>good morning comma how can I help question mark</transcript>
+            → good morning, how can I help?
+
+            <transcript>that's the update new paragraph let me know if you have questions</transcript>
+            → that's the update
+
+            let me know if you have questions
+
+            <transcript>please buy forty five apples</transcript>
+            → please buy 45 apples
 
             <transcript>what day of the week is it</transcript>
             → what day of the week is it

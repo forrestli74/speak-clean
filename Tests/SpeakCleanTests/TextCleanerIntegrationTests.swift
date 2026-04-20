@@ -167,6 +167,68 @@ struct TextCleanerIntegrationTests {
         #expect(lower.contains("travel more"))
     }
 
+    @Test func removesStutterRepetition() async throws {
+        if await skipIfUnavailable() { return }
+        let result = try await TextCleaner.clean(
+            "I I I think we should leave now",
+            dictionary: []
+        )
+        let lower = result.lowercased()
+        #expect(lower.contains("i think we should leave now"))
+        #expect(!lower.contains("i i"))
+    }
+
+    @Test func removesWordRepetition() async throws {
+        if await skipIfUnavailable() { return }
+        let result = try await TextCleaner.clean(
+            "the the the problem is that we ran out of time",
+            dictionary: []
+        )
+        let lower = result.lowercased()
+        #expect(lower.contains("the problem is"))
+        #expect(lower.contains("ran out of time"))
+        #expect(!lower.contains("the the"))
+    }
+
+    @Test func convertsSpokenPunctuation() async throws {
+        if await skipIfUnavailable() { return }
+        let result = try await TextCleaner.clean(
+            "hello comma how are you today question mark",
+            dictionary: []
+        )
+        let lower = result.lowercased()
+        #expect(lower.contains("hello,"))
+        #expect(result.contains("?"))
+        #expect(!lower.contains(" comma "))
+        #expect(!lower.contains("question mark"))
+    }
+
+    @Test func newParagraphStartsNewBlock() async throws {
+        if await skipIfUnavailable() { return }
+        let result = try await TextCleaner.clean(
+            "first sentence new paragraph second sentence",
+            dictionary: []
+        )
+        // The literal phrase "new paragraph" should be gone, replaced
+        // with a line break so the two sentences end up in different blocks.
+        #expect(result.contains("\n"))
+        #expect(!result.lowercased().contains("new paragraph"))
+        #expect(result.lowercased().contains("first sentence"))
+        #expect(result.lowercased().contains("second sentence"))
+    }
+
+    @Test func convertsSpokenNumberToDigits() async throws {
+        if await skipIfUnavailable() { return }
+        let result = try await TextCleaner.clean(
+            "I have twenty three unread emails",
+            dictionary: []
+        )
+        let lower = result.lowercased()
+        #expect(lower.contains("23"))
+        #expect(lower.contains("unread"))
+        #expect(!lower.contains("twenty three"))
+    }
+
     @Test func explicitBulletRequestProducesList() async throws {
         if await skipIfUnavailable() { return }
         let result = try await TextCleaner.clean(
