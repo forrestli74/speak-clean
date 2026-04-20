@@ -137,12 +137,6 @@ public enum TextCleaner {
             <transcript>I was planning to I decided to postpone the trip</transcript>
             → I decided to postpone the trip
 
-            <transcript>What's the weather today</transcript>
-            → What's the weather today
-
-            <transcript>what's your favorite color</transcript>
-            → what's your favorite color
-
             <transcript>what day of the week is it</transcript>
             → what day of the week is it
 

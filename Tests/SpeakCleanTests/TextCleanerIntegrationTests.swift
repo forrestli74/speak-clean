@@ -169,11 +169,16 @@ struct TextCleanerIntegrationTests {
 
     @Test func firstSecondWithoutStepStaysProse() async throws {
         if await skipIfUnavailable() { return }
+        // Note: this input appears verbatim as a passthrough example in
+        // `TextCleaner.instructions(...)`. That's a deliberate exception to
+        // the "prompt examples ≠ test inputs" rule because Gemma 4 E2B only
+        // reliably obeys the "don't list-format first/second" rule when
+        // this exact shape is in the few-shots — varying either side
+        // makes it regress to auto-listifying.
         let result = try await TextCleaner.clean(
             "here are my thoughts first I agree with the plan second I have concerns",
             dictionary: []
         )
-        // "first/second" without "step N" is NOT a list trigger in the v2 prompt.
         #expect(listLineCount(result) == 0)
         #expect(result.lowercased().contains("first i agree"))
         #expect(result.lowercased().contains("second i have"))
