@@ -67,6 +67,14 @@ final class RecordingCoordinator {
             let model = await MainActor.run { AppConfig.cleanupModel }
             return await runAvailabilityChecks(cleanupModel: model)
         })
+        // Self-bootstrap. `SwiftUI Scene` has no `.task` modifier, and
+        // `MenuBarExtra`'s content closure only renders when the menu is
+        // open — neither is a correct place to run the first availability
+        // check and install the hotkey. Spawning from `init` is fine
+        // because `bootstrap()` is idempotent (guarded by `bootstrapped`).
+        Task { [weak self] in
+            await self?.bootstrap()
+        }
     }
 
     @MainActor deinit {
