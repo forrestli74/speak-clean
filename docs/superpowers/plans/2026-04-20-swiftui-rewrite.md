@@ -465,10 +465,11 @@ struct SpeakCleanApp: App {
                 .frame(width: 18, height: 18)
         }
         .menuBarExtraStyle(.menu)
-        .task { await coordinator.bootstrap() }
     }
 }
 ```
+
+Note: SwiftUI `Scene` has no `.task` modifier, so bootstrap is triggered from `RecordingCoordinator.init()` instead — see the follow-up commit after this task that adds a `Task { [weak self] in await self?.bootstrap() }` inside `RecordingCoordinator`'s initializer.
 
 - [ ] **Step 2: Build**
 
@@ -673,10 +674,11 @@ struct SpeakCleanApp: App {
                 .frame(width: 18, height: 18)
         }
         .menuBarExtraStyle(.menu)
-        .task { await coordinator.bootstrap() }
     }
 }
 ```
+
+Note: unlike `View`, SwiftUI `Scene` has no `.task` modifier, and `MenuBarExtra`'s content only renders when the menu is open. Bootstrap is therefore triggered from `RecordingCoordinator.init()` via `Task { [weak self] in await self?.bootstrap() }` (already in place from Task 6's follow-up fix). Do not re-introduce a `.task` on the scene.
 
 - [ ] **Step 3: Delete the old entry file**
 
