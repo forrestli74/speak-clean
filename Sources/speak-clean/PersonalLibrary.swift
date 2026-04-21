@@ -10,14 +10,22 @@ enum AppConfig {
     /// identifier when editing the plist via `defaults write`.
     static let suiteName = "local.speakclean"
 
+    /// Registered default for the global recording shortcut.
+    /// Source of truth for both `defaults.register(...)` and the
+    /// "Reset to Defaults" button in the Settings view.
+    static let defaultShortcut = "option+space"
+
+    /// Registered default for the Ollama cleanup model tag.
+    static let defaultCleanupModel = "gemma4:e2b"
+
     /// The configured UserDefaults with registered defaults for any
     /// missing keys. Force-unwrapped because `suiteName` is a valid
     /// non-nil identifier.
     private static let defaults: UserDefaults = {
         let d = UserDefaults(suiteName: suiteName)!
         d.register(defaults: [
-            "shortcut": "option+space",
-            "cleanupModel": "gemma4:e2b",
+            "shortcut": defaultShortcut,
+            "cleanupModel": defaultCleanupModel,
         ])
         return d
     }()
@@ -55,12 +63,18 @@ enum AppConfig {
         set { defaults.set(newValue, forKey: "cleanupModel") }
     }
 
-    /// Parse `shortcut` into an `(NSEvent.ModifierFlags, keyCode)` pair
-    /// suitable for the global/local `NSEvent` keyDown monitors.
-    /// Returns `nil` if the string is malformed (no modifiers, unknown
-    /// modifier name, unknown key name).
-    static var parsedShortcut: (modifiers: NSEvent.ModifierFlags, keyCode: UInt16)? {
-        let parts = shortcut.lowercased().split(separator: "+").map(String.init)
+    /// Parse an arbitrary shortcut string like `"cmd+shift+d"` into an
+    /// `(NSEvent.ModifierFlags, keyCode)` pair. Returns `nil` if the
+    /// string has no modifiers, uses unknown modifier names, or uses an
+    /// unknown key. Case-insensitive; tolerant of whitespace around `+`.
+    ///
+    /// Used by both `parsedShortcut` (on the stored value) and the
+    /// Settings view (on candidate input before persisting).
+    static func parse(_ s: String) -> (modifiers: NSEvent.ModifierFlags, keyCode: UInt16)? {
+        let parts = s.lowercased()
+            .split(separator: "+")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
         guard parts.count >= 2 else { return nil }
         var modifiers: NSEvent.ModifierFlags = []
         for part in parts.dropLast() {
@@ -74,6 +88,14 @@ enum AppConfig {
         }
         guard let keyCode = keyCodeMap[parts.last!] else { return nil }
         return (modifiers, keyCode)
+    }
+
+    /// Parse `shortcut` (the stored preference) into an
+    /// `(NSEvent.ModifierFlags, keyCode)` pair. Returns `nil` if the
+    /// stored string is malformed — `installHotkey()` treats this as a
+    /// no-op and logs a warning.
+    static var parsedShortcut: (modifiers: NSEvent.ModifierFlags, keyCode: UInt16)? {
+        parse(shortcut)
     }
 
     /// macOS virtual-keycode table for `parsedShortcut`. Covers letters,
