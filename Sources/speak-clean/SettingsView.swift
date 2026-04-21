@@ -32,36 +32,30 @@ struct SettingsView: View {
 
     var body: some View {
         Form {
-            LabeledContent("Shortcut") {
-                VStack(alignment: .leading, spacing: 4) {
-                    TextField("option+space", text: $shortcutText)
-                        .textFieldStyle(.roundedBorder)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 5)
-                                .stroke(.red, lineWidth: shortcutIsValid ? 0 : 1)
-                        )
-                        .focused($shortcutFocused)
-                        .onSubmit { commitShortcut() }
-                        .onChange(of: shortcutFocused) { wasFocused, isFocused in
-                            if wasFocused && !isFocused { commitShortcut() }
-                        }
-                    if !shortcutIsValid {
-                        Text("Use e.g. option+space — one or more modifiers plus a known key")
-                            .font(.caption)
-                            .foregroundStyle(.red)
-                    }
+            TextField("Shortcut", text: $shortcutText)
+                .textFieldStyle(.roundedBorder)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 5)
+                        .stroke(.red, lineWidth: shortcutIsValid ? 0 : 1)
+                )
+                .focused($shortcutFocused)
+                .onSubmit { commitShortcut() }
+                .onChange(of: shortcutFocused) { wasFocused, isFocused in
+                    if wasFocused && !isFocused { commitShortcut() }
                 }
+            if !shortcutIsValid {
+                Text("Use e.g. option+space — one or more modifiers plus a known key")
+                    .font(.caption)
+                    .foregroundStyle(.red)
             }
 
-            LabeledContent("Model") {
-                TextField("gemma4:e2b", text: $modelText)
-                    .textFieldStyle(.roundedBorder)
-                    .focused($modelFocused)
-                    .onSubmit { commitModel() }
-                    .onChange(of: modelFocused) { wasFocused, isFocused in
-                        if wasFocused && !isFocused { commitModel() }
-                    }
-            }
+            TextField("Model", text: $modelText)
+                .textFieldStyle(.roundedBorder)
+                .focused($modelFocused)
+                .onSubmit { commitModel() }
+                .onChange(of: modelFocused) { wasFocused, isFocused in
+                    if wasFocused && !isFocused { commitModel() }
+                }
 
             HStack {
                 Spacer()
