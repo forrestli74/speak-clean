@@ -97,6 +97,7 @@ struct SpeakCleanApp: App {
                 Text(reason).foregroundStyle(.secondary)
                 Divider()
             }
+            SettingsMenuButton()
             Button("Edit Dictionary…") { coordinator.editDictionary() }
             Button("Reset") { Task { await coordinator.reset() } }
             Divider()
@@ -107,5 +108,21 @@ struct SpeakCleanApp: App {
                 .frame(width: 18, height: 18)
         }
         .menuBarExtraStyle(.menu)
+
+        Settings {
+            SettingsView(coordinator: coordinator)
+        }
+    }
+}
+
+/// Menu-bar button that opens the Settings scene via SwiftUI's
+/// `openSettings` action. Split out from the parent `Scene`'s content
+/// closure because `@Environment(\.openSettings)` requires a `View`
+/// context.
+private struct SettingsMenuButton: View {
+    @Environment(\.openSettings) private var openSettings
+
+    var body: some View {
+        Button("Settings…") { openSettings() }
     }
 }
