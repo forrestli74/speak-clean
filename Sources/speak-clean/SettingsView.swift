@@ -1,5 +1,4 @@
 import SwiftUI
-import AppKit
 
 /// Minimal Settings pane: a `Form` with two text fields and a
 /// "Reset to Defaults" button. Each field commits on Return or
