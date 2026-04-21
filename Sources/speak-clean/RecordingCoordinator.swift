@@ -78,8 +78,7 @@ final class RecordingCoordinator {
     }
 
     @MainActor deinit {
-        if let m = globalMonitor { NSEvent.removeMonitor(m) }
-        if let m = localMonitor { NSEvent.removeMonitor(m) }
+        removeHotkey()
     }
 
     // MARK: - Derived (for the view)
@@ -117,6 +116,22 @@ final class RecordingCoordinator {
     }
 
     // MARK: - Hotkey
+
+    /// Tear down any installed global/local `NSEvent` monitors.
+    /// Safe to call multiple times; idempotent because the handles are
+    /// nil'd after removal.
+    private func removeHotkey() {
+        if let m = globalMonitor { NSEvent.removeMonitor(m); globalMonitor = nil }
+        if let m = localMonitor  { NSEvent.removeMonitor(m);  localMonitor  = nil }
+    }
+
+    /// Tear down and reinstall the hotkey monitors. Called from the
+    /// Settings view after the user commits a new `AppConfig.shortcut`,
+    /// and from the "Reset to Defaults" path.
+    func reinstallHotkey() {
+        removeHotkey()
+        installHotkey()
+    }
 
     /// Install global + local `NSEvent` monitors for the configured
     /// shortcut. The global monitor catches presses when other apps are
