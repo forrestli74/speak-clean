@@ -118,11 +118,16 @@ struct SpeakCleanApp: App {
 /// Menu-bar button that opens the Settings scene via SwiftUI's
 /// `openSettings` action. Split out from the parent `Scene`'s content
 /// closure because `@Environment(\.openSettings)` requires a `View`
-/// context.
+/// context. `.accessory` apps must activate before opening the window —
+/// otherwise `openSettings()` creates the window but leaves it behind
+/// whatever process is currently frontmost.
 private struct SettingsMenuButton: View {
     @Environment(\.openSettings) private var openSettings
 
     var body: some View {
-        Button("Settings…") { openSettings() }
+        Button("Settings…") {
+            NSApp.activate(ignoringOtherApps: true)
+            openSettings()
+        }
     }
 }
