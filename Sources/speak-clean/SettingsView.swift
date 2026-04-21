@@ -20,6 +20,8 @@ struct SettingsView: View {
 
     @State private var shortcutText: String = AppConfig.shortcut
     @State private var modelText: String = AppConfig.cleanupModel
+    @FocusState private var shortcutFocused: Bool
+    @FocusState private var modelFocused: Bool
 
     /// Parse-based validity. `nil` means the user hasn't typed a
     /// recognizable shortcut yet; we show a red border and do not
@@ -38,7 +40,11 @@ struct SettingsView: View {
                             RoundedRectangle(cornerRadius: 5)
                                 .stroke(.red, lineWidth: shortcutIsValid ? 0 : 1)
                         )
+                        .focused($shortcutFocused)
                         .onSubmit { commitShortcut() }
+                        .onChange(of: shortcutFocused) { wasFocused, isFocused in
+                            if wasFocused && !isFocused { commitShortcut() }
+                        }
                     if !shortcutIsValid {
                         Text("Use e.g. option+space — one or more modifiers plus a known key")
                             .font(.caption)
@@ -50,7 +56,11 @@ struct SettingsView: View {
             LabeledContent("Model") {
                 TextField("gemma4:e2b", text: $modelText)
                     .textFieldStyle(.roundedBorder)
+                    .focused($modelFocused)
                     .onSubmit { commitModel() }
+                    .onChange(of: modelFocused) { wasFocused, isFocused in
+                        if wasFocused && !isFocused { commitModel() }
+                    }
             }
 
             HStack {
