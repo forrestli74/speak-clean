@@ -64,10 +64,15 @@ struct SettingsView: View {
         }
         .padding(20)
         .frame(width: 420)
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in
+            commitShortcut()
+            commitModel()
+        }
     }
 
     private func commitShortcut() {
         let trimmed = shortcutText.trimmingCharacters(in: .whitespaces)
+        guard trimmed != AppConfig.shortcut else { return }
         guard AppConfig.parse(trimmed) != nil else { return }
         AppConfig.shortcut = trimmed
         shortcutText = trimmed
@@ -80,6 +85,7 @@ struct SettingsView: View {
             modelText = AppConfig.cleanupModel
             return
         }
+        guard trimmed != AppConfig.cleanupModel else { return }
         AppConfig.cleanupModel = trimmed
         modelText = trimmed
         Task { await coordinator.reset() }
