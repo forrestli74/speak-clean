@@ -1,6 +1,5 @@
 import Foundation
 import AVFoundation
-import CoreGraphics
 import Speech
 import SpeakCleanCore
 
@@ -13,12 +12,9 @@ import SpeakCleanCore
 /// 2. The configured cleanup model is pulled.
 /// 3. `AVCaptureDevice.requestAccess(for: .audio)` — microphone
 ///    permission (prompts the user on first run).
-/// 4. Input Monitoring permission via `CGRequestListenEventAccess` —
-///    required by `NSEvent.addGlobalMonitorForEvents`. Also registers
-///    the app with TCC on first call (for properly-signed apps).
-/// 5. `DictationTranscriber.supportedLocale(equivalentTo:)` — whether
+/// 4. `DictationTranscriber.supportedLocale(equivalentTo:)` — whether
 ///    the user's system locale has dictation assets available.
-/// 6. `AssetInventory.assetInstallationRequest(supporting:)` — if the
+/// 5. `AssetInventory.assetInstallationRequest(supporting:)` — if the
 ///    STT assets aren't installed, download them (this can block on
 ///    the first run on a fresh OS install).
 ///
@@ -44,23 +40,12 @@ func runAvailabilityChecks(cleanupModel: String) async -> AppController.State {
         return .notReady(reason: "Microphone permission denied. Grant it in System Settings.")
     }
 
-    // 4. Input Monitoring permission — needed by NSEvent global key monitor.
-    // `CGRequestListenEventAccess` is the CoreGraphics-provided registration
-    // API. For properly-signed apps it prompts inline and adds the app to
-    // System Settings → Privacy & Security → Input Monitoring. Ad-hoc signed
-    // apps may fail to auto-register; the surfaced reason tells the user to
-    // add the app manually via the `+` button in that pane.
-    _ = CGRequestListenEventAccess()
-    guard CGPreflightListenEventAccess() else {
-        return .notReady(reason: "Input Monitoring not granted. In System Settings → Privacy & Security → Input Monitoring, click +, select SpeakClean, enable it, then click Reset.")
-    }
-
-    // 5. Locale support
+    // 4. Locale support
     guard let locale = await DictationTranscriber.supportedLocale(equivalentTo: Locale.current) else {
         return .notReady(reason: "Dictation doesn't support your locale (\(Locale.current.identifier)).")
     }
 
-    // 6. STT assets
+    // 5. STT assets
     let transcriber = DictationTranscriber(
         locale: locale,
         contentHints: [],
