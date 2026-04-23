@@ -71,8 +71,14 @@ cat > "$APP_DIR/Contents/Info.plist" <<EOF
 </plist>
 EOF
 
-echo "==> ad-hoc codesign"
-codesign --force --deep --sign - "$APP_DIR"
+SIGN_ID="${SIGN_ID:-}"
+if [[ -n "$SIGN_ID" ]]; then
+    echo "==> codesign with '$SIGN_ID'"
+    codesign --force --deep --sign "$SIGN_ID" "$APP_DIR"
+else
+    echo "==> ad-hoc codesign (set SIGN_ID='Apple Development: ...' for a stable identity)"
+    codesign --force --deep --sign - "$APP_DIR"
+fi
 codesign --verify --verbose=2 "$APP_DIR"
 
 echo ""
