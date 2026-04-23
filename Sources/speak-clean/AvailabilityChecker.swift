@@ -1,6 +1,6 @@
 import Foundation
 import AVFoundation
-import IOKit.hid
+import CoreGraphics
 import Speech
 import SpeakCleanCore
 
@@ -13,9 +13,9 @@ import SpeakCleanCore
 /// 2. The configured cleanup model is pulled.
 /// 3. `AVCaptureDevice.requestAccess(for: .audio)` — microphone
 ///    permission (prompts the user on first run).
-/// 4. Input Monitoring permission via `IOHIDCheckAccess` — required by
-///    `NSEvent.addGlobalMonitorForEvents`. Also registers the app with
-///    TCC on first call so it appears in System Settings.
+/// 4. Input Monitoring permission via `CGRequestListenEventAccess` —
+///    required by `NSEvent.addGlobalMonitorForEvents`. Also registers
+///    the app with TCC on first call (for properly-signed apps).
 /// 5. `DictationTranscriber.supportedLocale(equivalentTo:)` — whether
 ///    the user's system locale has dictation assets available.
 /// 6. `AssetInventory.assetInstallationRequest(supporting:)` — if the
@@ -45,13 +45,14 @@ func runAvailabilityChecks(cleanupModel: String) async -> AppController.State {
     }
 
     // 4. Input Monitoring permission — needed by NSEvent global key monitor.
-    // `IOHIDRequestAccess` registers the app in System Settings → Privacy &
-    // Security → Input Monitoring. On some macOS versions it prompts inline;
-    // on others the user must toggle it there manually. Re-check afterward
-    // and, if still ungranted, surface an actionable reason.
-    _ = IOHIDRequestAccess(kIOHIDRequestTypeListenEvent)
-    guard IOHIDCheckAccess(kIOHIDRequestTypeListenEvent) == kIOHIDAccessTypeGranted else {
-        return .notReady(reason: "Input Monitoring not granted. Enable SpeakClean in System Settings → Privacy & Security → Input Monitoring, then click Reset.")
+    // `CGRequestListenEventAccess` is the CoreGraphics-provided registration
+    // API. For properly-signed apps it prompts inline and adds the app to
+    // System Settings → Privacy & Security → Input Monitoring. Ad-hoc signed
+    // apps may fail to auto-register; the surfaced reason tells the user to
+    // add the app manually via the `+` button in that pane.
+    _ = CGRequestListenEventAccess()
+    guard CGPreflightListenEventAccess() else {
+        return .notReady(reason: "Input Monitoring not granted. In System Settings → Privacy & Security → Input Monitoring, click +, select SpeakClean, enable it, then click Reset.")
     }
 
     // 5. Locale support
