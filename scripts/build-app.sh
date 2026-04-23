@@ -17,7 +17,10 @@ cd "$(dirname "$0")/.."
 
 VERSION="${VERSION:-0.1.0}"
 APP_NAME="SpeakClean"
-BUNDLE_ID="local.speakclean"
+# Bundle ID must NOT equal the UserDefaults suite name in PersonalLibrary.swift
+# ("local.speakclean") — macOS refuses `UserDefaults(suiteName:)` when the
+# suite name matches the caller's bundle ID.
+BUNDLE_ID="io.github.forrestli74.speak-clean"
 EXECUTABLE="speak-clean"
 MIN_MACOS="26.0"
 
