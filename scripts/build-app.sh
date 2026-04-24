@@ -42,6 +42,13 @@ mkdir -p "$APP_DIR/Contents/Resources"
 
 cp "$BUILT_BIN" "$APP_DIR/Contents/MacOS/${EXECUTABLE}"
 
+ICON_SRC="Resources/AppIcon/AppIcon.icns"
+if [[ ! -f "$ICON_SRC" ]]; then
+    echo "error: $ICON_SRC not found — run scripts/build-icon.sh first" >&2
+    exit 1
+fi
+cp "$ICON_SRC" "$APP_DIR/Contents/Resources/AppIcon.icns"
+
 cat > "$APP_DIR/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -51,6 +58,8 @@ cat > "$APP_DIR/Contents/Info.plist" <<EOF
     <string>${BUNDLE_ID}</string>
     <key>CFBundleExecutable</key>
     <string>${EXECUTABLE}</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>CFBundleName</key>
     <string>${APP_NAME}</string>
     <key>CFBundleDisplayName</key>

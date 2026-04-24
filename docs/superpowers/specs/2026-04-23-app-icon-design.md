@@ -37,19 +37,19 @@ The icon is produced from a single authored source, rasterized into Apple's stan
 
 ### Source file
 
-`Resources/AppIcon/icon.svg` — hand-authored 1024 × 1024 SVG. Contains the squircle mask, the gradient, and the glyph. Checked into git as the canonical source.
+`scripts/render-icon.swift` — single-file Swift script that composes a 1024 × 1024 `IconView` in SwiftUI (`RoundedRectangle(cornerRadius: 185, style: .continuous)` for the squircle, `LinearGradient` for the fill, a `Path` for the glyph) and snapshots it with `ImageRenderer` into a PNG. Checked into git as the canonical source.
 
-Rationale for SVG (vs. a Swift renderer that reuses `NSBezierPath` like the menu bar): the squircle superellipse is the complicated part, and encoding it once as an SVG path is simpler than translating it to Core Graphics. The glyph itself is trivial in either format. Keeping the source human-readable makes it easy to tweak colors or proportions later without needing to run a Swift tool.
+Rationale for a SwiftUI renderer over an authored SVG: Apple's exact macOS Big Sur+ squircle path is hard to encode faithfully in SVG without the official Sketch/Figma template, but SwiftUI's `.continuous` corner style *is* that curve. Going through Swift avoids the SVG-rasterization step entirely and lets the squircle be Apple's own math rather than an approximation.
 
 ### Rasterization
 
 `scripts/build-icon.sh` — shell script that:
 
-1. Renders `Resources/AppIcon/icon.svg` to a 1024 × 1024 PNG using the system's `qlmanage` or, if unreliable, a zero-dep Swift one-liner that loads the SVG via `WebKit.WKWebView` and snapshots it. The implementation plan will pick the most reliable path available on macOS 26 without Homebrew dependencies.
-2. Uses `sips` (built into macOS) to downscale the 1024 PNG to the other iconset sizes: 16, 32, 64, 128, 256, 512, and their `@2x` variants (see `man iconutil` for the exact 10-file naming convention).
-3. Packages the `.iconset` directory into `Resources/AppIcon/AppIcon.icns` via `iconutil -c icns`.
+1. Runs `swift scripts/render-icon.swift Resources/AppIcon/icon-1024.png` to produce the 1024 × 1024 source PNG.
+2. Uses `sips` (built into macOS) to downscale the 1024 PNG to the other iconset sizes: 16, 32, 64, 128, 256, 512, and their `@2x` variants (10 files total — see `man iconutil`).
+3. Packages the `.iconset` directory into `Resources/AppIcon/AppIcon.icns` via `iconutil -c icns`. The intermediate `.iconset` is deleted after packaging.
 
-Both the source SVG **and** the generated `AppIcon.icns` are checked in. The script is idempotent and documented, but the build pipeline does not invoke it — regenerating the icon is a developer action, not a build-time step, so normal `swift build` and `scripts/build-app.sh` runs remain offline and dependency-free.
+Both `icon-1024.png` **and** the generated `AppIcon.icns` are checked in. The script is idempotent but the build pipeline does not invoke it — regenerating the icon is a developer action, not a build-time step, so normal `swift build` and `scripts/build-app.sh` runs remain offline and dependency-free.
 
 ### App bundle integration
 
@@ -62,12 +62,12 @@ No code changes in the Swift targets. The app is `LSUIElement = true` (no Dock i
 
 ## Files touched
 
-- **New:** `Resources/AppIcon/icon.svg`
-- **New:** `Resources/AppIcon/AppIcon.icns` (generated, committed)
+- **New:** `scripts/render-icon.swift`
 - **New:** `scripts/build-icon.sh`
+- **New:** `Resources/AppIcon/icon-1024.png` (generated, committed)
+- **New:** `Resources/AppIcon/AppIcon.icns` (generated, committed)
 - **Modified:** `scripts/build-app.sh` (copy icon, add `CFBundleIconFile`)
-- **Modified:** `.gitignore` if needed (keep the intermediate `.iconset` directory out of git)
-- **Modified:** `CLAUDE.md` — short note that the icon is authored in `Resources/AppIcon/icon.svg` and regenerated via `scripts/build-icon.sh`
+- **Modified:** `CLAUDE.md` — short note that the icon is authored in `scripts/render-icon.swift` and regenerated via `scripts/build-icon.sh`
 
 ## Testing
 
@@ -81,7 +81,7 @@ No automated tests.
 
 ## Open questions
 
-None at spec time. The implementation plan resolves:
+None — resolved during implementation:
 
-- Exact SVG → PNG rasterization path (whether `qlmanage` is reliable on macOS 26, or if a small inline Swift helper is cleaner).
-- Final glyph stroke width at 1024 px (tuned so that the 16 px rasterization still reads — starting point ~39 px, likely to be bumped to ~44–50 px after a visual check at small sizes).
+- **Rasterization path:** replaced the planned SVG source + external rasterizer with a SwiftUI `ImageRenderer` script. Apple's squircle curve comes "for free" from `RoundedRectangle(style: .continuous)`.
+- **Glyph stroke width:** left at the starting ~39 px. Reads clearly at ≥32 px; slightly muddy at 16 px but that's expected for Finder sidebar size — a tweak can come later if needed.

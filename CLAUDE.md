@@ -61,6 +61,10 @@ Reasons surfaced by the availability checker are actionable — e.g. `"Ollama is
 - **No CLI mode** — removed when we switched off whisper.cpp. If debugging is needed later, add a file-driven harness then.
 - **`AnalysisContext.contextualStrings` is not wired yet** — per the design spec, the attachment point on `SpeechAnalyzer` wasn't confirmable from the docs. The dictionary is injected only into the cleanup prompt. STT-side biasing can be added later if accuracy on dictionary words turns out to be the bottleneck.
 
+## App icon
+
+Authored in `scripts/render-icon.swift` (SwiftUI `ImageRenderer`, 1024 px canvas, squircle + gradient + the menu-bar glyph). Regenerate with `scripts/build-icon.sh` — writes `Resources/AppIcon/icon-1024.png` and `Resources/AppIcon/AppIcon.icns`, both committed. `scripts/build-app.sh` copies the `.icns` into the bundle; it is not built at `swift build` time.
+
 ## Worktrees
 
 Git worktrees should be created in `.worktrees/` directory.
