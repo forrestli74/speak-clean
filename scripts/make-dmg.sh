@@ -14,10 +14,14 @@
 #
 set -euo pipefail
 
+cd "$(dirname "$0")/.."
+
 APP_PATH="${1:-build/SpeakClean.app}"
 OUT_DMG="build/SpeakClean.dmg"
 VOL_NAME="SpeakClean"
 STAGING_DIR="build/dmg-staging"
+
+trap 'rm -rf "$STAGING_DIR"' EXIT
 
 if [[ ! -d "$APP_PATH" ]]; then
     echo "error: app bundle not found at $APP_PATH" >&2
@@ -39,8 +43,6 @@ hdiutil create \
     -ov \
     -format UDZO \
     "$OUT_DMG"
-
-rm -rf "$STAGING_DIR"
 
 echo ""
 echo "built $OUT_DMG"
