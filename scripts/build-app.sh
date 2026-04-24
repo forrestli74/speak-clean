@@ -81,9 +81,13 @@ cat > "$APP_DIR/Contents/Info.plist" <<EOF
 EOF
 
 SIGN_ID="${SIGN_ID:-}"
+REQUIRE_SIGN_ID="${REQUIRE_SIGN_ID:-0}"
 if [[ -n "$SIGN_ID" ]]; then
     echo "==> codesign with '$SIGN_ID'"
     codesign --force --deep --sign "$SIGN_ID" "$APP_DIR"
+elif [[ "$REQUIRE_SIGN_ID" == "1" ]]; then
+    echo "error: REQUIRE_SIGN_ID=1 but SIGN_ID is empty — refusing to ad-hoc sign" >&2
+    exit 1
 else
     echo "==> ad-hoc codesign (set SIGN_ID='Apple Development: ...' for a stable identity)"
     codesign --force --deep --sign - "$APP_DIR"
