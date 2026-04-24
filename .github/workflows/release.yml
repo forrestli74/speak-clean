@@ -1,0 +1,198 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to build (e.g., 0.2.0). Only used when dispatching manually.'
+        required: true
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    env:
+      ALLOW_SIGNING_IDENTITY_CHANGE: ${{ vars.ALLOW_SIGNING_IDENTITY_CHANGE == 'true' && 'true' || 'false' }}
+
+    steps:
+      - name: Resolve version
+        id: version
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            TAG="${GITHUB_REF#refs/tags/}"
+            VERSION="${TAG#v}"
+          else
+            VERSION="${{ github.event.inputs.version }}"
+          fi
+          if [[ -z "$VERSION" ]]; then
+            echo "::error::Could not determine version"
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Building v$VERSION"
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode (matches local toolchain)
+        run: sudo xcode-select -s /Applications/Xcode_26.app/Contents/Developer
+
+      - name: Import signing certificate into temp keychain
+        env:
+          SIGNING_CERT_P12: ${{ secrets.SIGNING_CERT_P12 }}
+          SIGNING_CERT_PASSWORD: ${{ secrets.SIGNING_CERT_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$SIGNING_CERT_P12" ]] || [[ -z "$SIGNING_CERT_PASSWORD" ]]; then
+            echo "::error::SIGNING_CERT_P12 and SIGNING_CERT_PASSWORD secrets are required"
+            exit 1
+          fi
+
+          KEYCHAIN_PATH="$RUNNER_TEMP/speakclean-signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(uuidgen)"
+          echo "$SIGNING_CERT_P12" | base64 --decode > "$RUNNER_TEMP/signing.p12"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          security import "$RUNNER_TEMP/signing.p12" \
+            -P "$SIGNING_CERT_PASSWORD" \
+            -A -t cert -f pkcs12 \
+            -k "$KEYCHAIN_PATH" \
+            -T /usr/bin/codesign
+
+          # Put the temp keychain in the user search list so codesign finds it.
+          # (On the CI runner, we don't need the login keychain — the only
+          # identity we want is the one we just imported.)
+          security list-keychain -d user -s "$KEYCHAIN_PATH"
+
+          security set-key-partition-list \
+            -S apple-tool:,apple: \
+            -s -k "$KEYCHAIN_PASSWORD" \
+            "$KEYCHAIN_PATH"
+
+          rm -f "$RUNNER_TEMP/signing.p12"
+
+          echo "Signing identities in temp keychain:"
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH"
+
+      - name: Build signed .app
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          SIGN_ID: SpeakClean Dev
+          REQUIRE_SIGN_ID: '1'
+        run: |
+          set -euo pipefail
+          scripts/build-app.sh
+
+      - name: Verify signature
+        run: |
+          set -euo pipefail
+          codesign --verify --deep --strict --verbose=4 build/SpeakClean.app
+          codesign -dv --verbose=4 build/SpeakClean.app
+
+      - name: Capture candidate designated requirement
+        run: |
+          set -euo pipefail
+          mkdir -p build
+          codesign -dr - build/SpeakClean.app 2>&1 \
+            | sed -n 's/^designated => //p' \
+            > build/candidate-dr.txt
+          if [[ ! -s build/candidate-dr.txt ]]; then
+            echo "::error::Failed to extract candidate designated requirement"
+            exit 1
+          fi
+          echo "Candidate DR:"
+          cat build/candidate-dr.txt
+
+      - name: Compare DR against previous release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          PREV_TAG="$(gh release list --limit 1 --exclude-drafts --exclude-pre-releases --json tagName --jq '.[0].tagName' 2>/dev/null || true)"
+          if [[ -z "$PREV_TAG" ]] || [[ "$PREV_TAG" == "null" ]]; then
+            echo "No previous release found — skipping DR comparison."
+            exit 0
+          fi
+
+          echo "Comparing against $PREV_TAG"
+          mkdir -p build/previous
+          if ! gh release download "$PREV_TAG" -p 'SpeakClean.dmg' -D build/previous; then
+            echo "::warning::Previous release has no SpeakClean.dmg asset — skipping DR comparison."
+            exit 0
+          fi
+
+          MOUNT="$(mktemp -d /tmp/sc-prev.XXXXXX)"
+          trap 'hdiutil detach "$MOUNT" -quiet >/dev/null 2>&1 || true; rm -rf "$MOUNT"' EXIT
+          hdiutil attach build/previous/SpeakClean.dmg -mountpoint "$MOUNT" -nobrowse -quiet
+
+          if [[ ! -d "$MOUNT/SpeakClean.app" ]]; then
+            echo "::warning::Previous DMG has no SpeakClean.app at root — skipping DR comparison."
+            exit 0
+          fi
+
+          codesign -dr - "$MOUNT/SpeakClean.app" 2>&1 \
+            | sed -n 's/^designated => //p' \
+            > build/previous-dr.txt
+
+          if [[ ! -s build/previous-dr.txt ]]; then
+            echo "::warning::Failed to extract previous DR — skipping comparison."
+            exit 0
+          fi
+
+          echo "Previous DR:"
+          cat build/previous-dr.txt
+
+          if diff -u build/previous-dr.txt build/candidate-dr.txt; then
+            echo "Designated requirement matches previous release."
+            exit 0
+          fi
+
+          if [[ "$ALLOW_SIGNING_IDENTITY_CHANGE" == "true" ]]; then
+            echo "::warning::ALLOW_SIGNING_IDENTITY_CHANGE=true — proceeding despite DR drift"
+            exit 0
+          fi
+
+          echo "::error::Candidate DR differs from previous release. Existing users would lose TCC grants. Set repo variable ALLOW_SIGNING_IDENTITY_CHANGE=true only for intentional cert rotations."
+          exit 1
+
+      - name: Package DMG
+        run: scripts/make-dmg.sh build/SpeakClean.app
+
+      - name: Compute SHA256
+        id: sha
+        run: |
+          set -euo pipefail
+          SHA="$(shasum -a 256 build/SpeakClean.dmg | awk '{print $1}')"
+          echo "sha256=$SHA" >> "$GITHUB_OUTPUT"
+          echo "SHA-256: $SHA"
+
+      - name: Create or update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: ${{ steps.version.outputs.tag }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          files: build/SpeakClean.dmg
+          body: |
+            **Download:** https://github.com/${{ github.repository }}/releases/latest/download/SpeakClean.dmg
+
+            **SHA-256:** `${{ steps.sha.outputs.sha256 }}`
+
+            **First install:** open the DMG, drag `SpeakClean.app` to `Applications`, then right-click the app in `/Applications` and choose **Open** to bypass the Gatekeeper warning (one-time, per install).
+
+            **Updates:** download and replace. macOS Accessibility and Microphone permissions carry over automatically because the app is signed with a stable self-signed certificate.
