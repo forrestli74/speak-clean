@@ -25,13 +25,15 @@ jobs:
     steps:
       - name: Resolve version
         id: version
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.version }}
         run: |
           set -euo pipefail
           if [[ "${{ github.event_name }}" == "push" ]]; then
             TAG="${GITHUB_REF#refs/tags/}"
             VERSION="${TAG#v}"
           else
-            VERSION="${{ github.event.inputs.version }}"
+            VERSION="$INPUT_VERSION"
           fi
           if [[ -z "$VERSION" ]]; then
             echo "::error::Could not determine version"
@@ -42,10 +44,19 @@ jobs:
           echo "Building v$VERSION"
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
 
       - name: Select Xcode (matches local toolchain)
-        run: sudo xcode-select -s /Applications/Xcode_26.app/Contents/Developer
+        run: |
+          set -euo pipefail
+          XCODE_PATH="/Applications/Xcode_26.app"
+          if [[ ! -d "$XCODE_PATH" ]]; then
+            echo "::warning::$XCODE_PATH not found; falling back to xcode-select default"
+            XCODE_PATH="$(xcode-select -p | sed 's|/Contents/Developer||')"
+          fi
+          sudo xcode-select -s "$XCODE_PATH/Contents/Developer"
+          xcodebuild -version
+          swift --version
 
       - name: Import signing certificate into temp keychain
         env:
@@ -53,6 +64,7 @@ jobs:
           SIGNING_CERT_PASSWORD: ${{ secrets.SIGNING_CERT_PASSWORD }}
         run: |
           set -euo pipefail
+          trap 'rm -f "$RUNNER_TEMP/signing.p12"' EXIT
           if [[ -z "$SIGNING_CERT_P12" ]] || [[ -z "$SIGNING_CERT_PASSWORD" ]]; then
             echo "::error::SIGNING_CERT_P12 and SIGNING_CERT_PASSWORD secrets are required"
             exit 1
@@ -180,7 +192,7 @@ jobs:
           echo "SHA-256: $SHA"
 
       - name: Create or update GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@01570a1f39cb168c169c802c3bceb9e93fb10974  # v2.1.0
         with:
           tag_name: ${{ steps.version.outputs.tag }}
           name: ${{ steps.version.outputs.tag }}
