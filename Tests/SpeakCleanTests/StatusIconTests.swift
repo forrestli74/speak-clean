@@ -4,19 +4,30 @@ import Testing
 @Suite("StatusIcon priority")
 struct StatusIconTests {
 
+    // Recording phase dominates over availability state.
     @Test func recordingBeatsReady() {
-        #expect(StatusIcon.from(isRecording: true, state: .ready) == .recording)
+        #expect(StatusIcon.from(phase: .recording, state: .ready) == .recording)
     }
 
     @Test func recordingBeatsNotReady() {
-        #expect(StatusIcon.from(isRecording: true, state: .notReady(reason: "x")) == .recording)
+        #expect(StatusIcon.from(phase: .recording, state: .notReady(reason: "x")) == .recording)
     }
 
-    @Test func readyWhenNotRecording() {
-        #expect(StatusIcon.from(isRecording: false, state: .ready) == .idle)
+    // Processing phase dominates over availability state.
+    @Test func processingBeatsReady() {
+        #expect(StatusIcon.from(phase: .processing, state: .ready) == .processing)
     }
 
-    @Test func notReadyWhenNotRecording() {
-        #expect(StatusIcon.from(isRecording: false, state: .notReady(reason: "x")) == .processing)
+    @Test func processingBeatsNotReady() {
+        #expect(StatusIcon.from(phase: .processing, state: .notReady(reason: "x")) == .processing)
+    }
+
+    // Idle phase defers to availability state.
+    @Test func idleReadyIsIdle() {
+        #expect(StatusIcon.from(phase: .idle, state: .ready) == .idle)
+    }
+
+    @Test func idleNotReadyIsProcessing() {
+        #expect(StatusIcon.from(phase: .idle, state: .notReady(reason: "x")) == .processing)
     }
 }

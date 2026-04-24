@@ -1,8 +1,21 @@
 import AppKit
 
-/// Which menu-bar icon to show. Priority: recording trumps `AppController`
-/// state. Exposed at file scope (non-`@MainActor`) so the flicker-regression
-/// property can be unit-tested as a pure function.
+// MARK: - Phase and icon
+
+/// Three-state pipeline phase owned by `RecordingCoordinator`. Mutually
+/// exclusive by construction, so the menu-bar icon can be derived from
+/// `(phase, availability)` without ever showing two "live" states at once.
+enum RecordingPhase: Equatable {
+    /// No mic active, no pipeline running.
+    case idle
+    /// Mic live.
+    case recording
+    /// stop→clean→paste pipeline in flight.
+    case processing
+}
+
+/// Which menu-bar icon to show. Exposed at file scope (non-`@MainActor`)
+/// so the flicker-regression property can be unit-tested as a pure function.
 enum StatusIcon: Equatable {
     case idle
     case recording
@@ -10,15 +23,21 @@ enum StatusIcon: Equatable {
 }
 
 extension StatusIcon {
-    /// Derive the icon from coordinator + controller state.
+    /// Derive the icon from coordinator + controller state. Live phases
+    /// (`.recording`, `.processing`) outrank availability; `.idle` defers
+    /// to availability state.
     /// - Parameters:
-    ///   - isRecording: Whether a recording is currently in flight.
+    ///   - phase: The coordinator's current `RecordingPhase`.
     ///   - state: The `AppController` state at read time.
-    static func from(isRecording: Bool, state: AppController.State) -> StatusIcon {
-        if isRecording { return .recording }
-        switch state {
-        case .ready: return .idle
-        case .notReady: return .processing
+    static func from(phase: RecordingPhase, state: AppController.State) -> StatusIcon {
+        switch phase {
+        case .recording:  return .recording
+        case .processing: return .processing
+        case .idle:
+            switch state {
+            case .ready:    return .idle
+            case .notReady: return .processing
+            }
         }
     }
 }
@@ -42,9 +61,9 @@ final class RecordingCoordinator {
     /// coordinator to drive recording guards and error transitions.
     let controller: AppController
 
-    /// `true` between `startRecording()` and `stopRecording()`. Gates
-    /// re-entry of the hotkey handler.
-    private(set) var isRecording = false
+    /// Current pipeline phase. Drives the menu-bar icon (via `statusImage`)
+    /// and gates hotkey re-entry. Mutated only on the main actor.
+    private(set) var phase: RecordingPhase = .idle
 
     /// Pending post-recording Task (stop → clean → paste). Gates
     /// `startRecording` so a second hotkey press cannot race a still-
@@ -86,7 +105,7 @@ final class RecordingCoordinator {
     /// Icon to show in the menu bar. Priority lives in `StatusIcon.from`
     /// so the flicker-regression property is unit-testable.
     var statusImage: NSImage {
-        switch StatusIcon.from(isRecording: isRecording, state: controller.state) {
+        switch StatusIcon.from(phase: phase, state: controller.state) {
         case .idle: return MenuBarIcon.idle()
         case .recording: return MenuBarIcon.recording()
         case .processing: return MenuBarIcon.processing()
@@ -158,26 +177,33 @@ final class RecordingCoordinator {
 
     // MARK: - Recording flow
 
-    /// Hotkey dispatch. Single shortcut toggles: press starts, press again stops.
+    /// Hotkey dispatch. Single shortcut: `.idle` starts, `.recording`
+    /// stops, `.processing` is a no-op (pipeline still running from the
+    /// previous press).
     private func toggleRecording() {
-        if isRecording { stopRecording() } else { startRecording() }
+        switch phase {
+        case .idle:       startRecording()
+        case .recording:  stopRecording()
+        case .processing: break
+        }
     }
 
-    /// Begin recording if `.ready` and no outstanding stop task. On error,
-    /// flip the controller to `.notReady`.
+    /// Begin recording if `.ready`, idle, and no outstanding stop task.
+    /// On start-time failure, revert `phase` to `.idle` and flip the
+    /// controller to `.notReady`.
     ///
-    /// Sets `isRecording = true` synchronously before awaiting `start()`
+    /// Sets `phase = .recording` synchronously before awaiting `start()`
     /// so two rapidly-fired hotkey events in the same main-actor tick
     /// can't both enter the body and then both call `transcriber.start()`.
     private func startRecording() {
-        guard case .ready = controller.state, inFlight == nil, !isRecording else { return }
-        isRecording = true
+        guard case .ready = controller.state, inFlight == nil, phase == .idle else { return }
+        phase = .recording
         Task { @MainActor in
             do {
                 try await controller.transcriber.start()
             } catch {
                 print("[recording] start failed: \(error)")
-                isRecording = false
+                phase = .idle
                 controller.setState(.notReady(reason: "Recording start failed: \(error.localizedDescription)"))
             }
         }
@@ -185,14 +211,21 @@ final class RecordingCoordinator {
 
     /// End recording, run the LLM cleanup pass, and paste the result.
     /// All async work lives in `inFlight` so a subsequent hotkey press can
-    /// see "still processing" and no-op.
+    /// see `.processing` and no-op.
+    ///
+    /// Transitions `phase` from `.recording` to `.processing` synchronously,
+    /// then back to `.idle` in the task's `defer` (runs on both success and
+    /// error paths).
     private func stopRecording() {
-        guard isRecording else { return }
-        isRecording = false
+        guard phase == .recording else { return }
+        phase = .processing
 
         let controller = self.controller
         inFlight = Task { @MainActor [weak self] in
-            defer { self?.inFlight = nil }
+            defer {
+                self?.inFlight = nil
+                self?.phase = .idle
+            }
             do {
                 let t0 = CFAbsoluteTimeGetCurrent()
                 let raw = try await controller.transcriber.stop()
