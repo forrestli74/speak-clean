@@ -93,7 +93,10 @@ struct SpeakCleanApp: App {
 
     var body: some Scene {
         MenuBarExtra {
-            if case .notReady(let reason) = coordinator.controller.state {
+            if coordinator.phase == .processing {
+                Text("Transcribing…").foregroundStyle(.secondary)
+                Divider()
+            } else if case .notReady(let reason) = coordinator.controller.state {
                 Text(reason).foregroundStyle(.secondary)
                 Divider()
             }
