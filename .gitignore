@@ -10,3 +10,4 @@ DerivedData/
 output/
 .playwright-mcp/
 .superpowers/
+.worktrees/
