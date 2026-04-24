@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   build:
-    runs-on: macos-15
+    runs-on: macos-26-arm64
     timeout-minutes: 20
     permissions:
       contents: write
@@ -46,13 +46,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
 
-      - name: Select Xcode (matches local toolchain)
+      - name: Select Xcode 26
         run: |
           set -euo pipefail
-          XCODE_PATH="/Applications/Xcode_26.app"
+          # macos-26-arm64 ships multiple Xcode 26 minor versions side-by-side.
+          # Pin to a specific one for deterministic toolchain; fall back to the
+          # image default (/Applications/Xcode.app) if that version ever rotates out.
+          XCODE_PATH="/Applications/Xcode_26.3.app"
           if [[ ! -d "$XCODE_PATH" ]]; then
-            echo "::warning::$XCODE_PATH not found; falling back to xcode-select default"
-            XCODE_PATH="$(xcode-select -p | sed 's|/Contents/Developer||')"
+            echo "::warning::$XCODE_PATH not found; falling back to default /Applications/Xcode.app"
+            XCODE_PATH="/Applications/Xcode.app"
           fi
           sudo xcode-select -s "$XCODE_PATH/Contents/Developer"
           xcodebuild -version
